@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpiderKart — Portal de Juego | SpiderWebARG</title>
+
+  <!-- Google Fonts: Tactical System -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+  <!-- Theme script: load FIRST to prevent FOUC -->
+  <script src="js/theme.js"></script>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="css/tactical.css">
+  <link rel="stylesheet" href="css/index.css">
+</head>
+<body class="tac-page tactical-body">
+
+  <!-- Efectos de fondo -->
+  <div class="sw-scanlines"></div>
+  <div class="noise-overlay"></div>
+
+  <!-- HUD Corners -->
+  <div class="hud-corner hud-tl"><div class="hud-line h"></div><div class="hud-line v"></div></div>
+  <div class="hud-corner hud-tr" style="transform:scaleX(-1)"><div class="hud-line h"></div><div class="hud-line v" style="left:auto;right:0"></div></div>
+  <div class="hud-corner hud-bl" style="transform:scaleY(-1)"><div class="hud-line h" style="top:auto;bottom:0"></div><div class="hud-line v"></div></div>
+  <div class="hud-corner hud-br" style="transform:scale(-1)"><div class="hud-line h" style="top:auto;bottom:0"></div><div class="hud-line v" style="left:auto;right:0"></div></div>
+
+  <!-- ===================== MODAL OVERLAY ===================== -->
+  <div id="modal-overlay" class="modal-backdrop hidden" onclick="closeAllModals()"></div>
+
+  <!-- Modal Login -->
+  <div id="login-modal" class="sw-modal hidden">
+    <div class="sw-modal__inner">
+      <div class="sw-auth-header">
+        <div class="sw-auth-dot r"></div>
+        <div class="sw-auth-dot y"></div>
+        <div class="sw-auth-dot g"></div>
+        <span class="sw-modal__label">AUTH — INICIAR SESIÓN</span>
+        <button class="sw-modal__close" onclick="toggleModal('login-modal')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="sw-modal__body">
+        <h2 class="sw-modal__title">ACCESO AL SISTEMA</h2>
+        <p class="sw-modal__sub">Ingresá tus credenciales para continuar</p>
+        <form id="login-form">
+          <div class="sw-form-group">
+            <label class="sw-label" for="login-username">// USUARIO</label>
+            <input class="sw-input" type="text" id="login-username" placeholder="usuario" required>
+          </div>
+          <div class="sw-form-group">
+            <label class="sw-label" for="login-password">// CONTRASEÑA</label>
+            <input class="sw-input" type="password" id="login-password" placeholder="••••••••" required>
+          </div>
+          <div id="login-alert" class="sw-alert hidden"></div>
+          <button type="submit" class="sw-btn sw-btn--primary sw-btn--full">
+            <i class="fa-solid fa-right-to-bracket"></i> INGRESAR
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Registro -->
+  <div id="register-modal" class="sw-modal hidden">
+    <div class="sw-modal__inner">
+      <div class="sw-auth-header">
+        <div class="sw-auth-dot r"></div>
+        <div class="sw-auth-dot y"></div>
+        <div class="sw-auth-dot g"></div>
+        <span class="sw-modal__label">AUTH — REGISTRO</span>
+        <button class="sw-modal__close" onclick="toggleModal('register-modal')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="sw-modal__body">
+        <h2 class="sw-modal__title">CREAR CUENTA</h2>
+        <p class="sw-modal__sub">Registrate para competir en el leaderboard</p>
+        <form id="register-form">
+          <div class="sw-form-group">
+            <label class="sw-label" for="register-username">// USUARIO</label>
+            <input class="sw-input" type="text" id="register-username" placeholder="elige tu alias" required>
+          </div>
+          <div class="sw-form-group">
+            <label class="sw-label" for="register-password">// CONTRASEÑA</label>
+            <input class="sw-input" type="password" id="register-password" placeholder="mín. 6 caracteres" required>
+          </div>
+          <div id="register-alert" class="sw-alert hidden"></div>
+          <button type="submit" class="sw-btn sw-btn--primary sw-btn--full">
+            <i class="fa-solid fa-user-plus"></i> REGISTRARSE
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== NAVBAR ===================== -->
+  <nav class="sw-nav" id="sw-navbar">
+    <div class="sw-nav__inner">
+      <!-- Logo -->
+      <a href="/" class="sw-nav__brand">
+        <span class="brand-tag">[SW]</span>
+        <span class="brand-name">SPIDER<span class="brand-accent">KART</span></span>
+      </a>
+
+      <!-- Links desktop -->
+      <ul class="sw-nav__links" id="navMenu">
+        <li><a href="#juego" class="sw-nav__link">// JUEGO</a></li>
+        <li><a href="#leaderboard" class="sw-nav__link">// RANKING</a></li>
+        <li><a href="#contacto" class="sw-nav__link">// CONTACTO</a></li>
+        <li class="sw-nav__sep"></li>
+        
+        <!-- Auth state (sin sesión) -->
+        <li id="nav-auth-btns">
+          <button class="sw-btn sw-btn--ghost sw-btn--sm" onclick="toggleModal('login-modal')">LOGIN</button>
+          <button class="sw-btn sw-btn--primary sw-btn--sm" onclick="toggleModal('register-modal')">REGISTRO</button>
+        </li>
+        <!-- Auth state (con sesión) -->
+        <li id="nav-user-info" class="hidden">
+          <span style="font-family:var(--sw-font-m); font-size:0.7rem; color:var(--sw-red);">
+            <i class="fa-solid fa-user"></i> <span id="logged-username"></span>
+          </span>
+          <button class="sw-btn sw-btn--ghost sw-btn--sm" style="margin-left:10px" onclick="logout()">SALIR</button>
+        </li>
+      </ul>
+
+      <!-- Hamburger -->
+      <button class="sw-nav__toggle" id="nav-toggle">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ===================== HERO ===================== -->
+  <header class="hero-tac" id="hero">
+    <div class="hero-tac__content">
+      <div class="eyebrow-tag">
+        <span class="sw-pulse"></span>&nbsp; UNDERCODE EVENT — DEMO DE CAPACIDADES
+      </div>
+      <h1 class="hero-headline">
+        <span class="headline-line1">SPIDER</span><br>
+        <span class="headline-line2"><span class="text-accent">KART</span></span><br>
+        <span class="headline-line3 headline-sub">BROWSER RACING</span>
+      </h1>
+      <p class="hero-desc">
+        Juego de karts 3D en el navegador, desarrollado por <strong>SpiderWebARG</strong>.<br>Competí, subí al top del ranking y demostrá quién es el más rápido.
+      </p>
+      <div class="hero-actions">
+        <button class="sw-btn sw-btn--primary sw-btn--lg" onclick="document.getElementById('juego').scrollIntoView()">
+          <i class="fa-solid fa-gamepad"></i> VER JUEGO
+        </button>
+      </div>
+      <div class="hero-metrics">
+        <div class="metric-block">
+          <div class="metric-val">3D</div>
+          <div class="metric-label">THREE.JS ENGINE</div>
+        </div>
+        <div class="metric-divider"></div>
+        <div class="metric-block">
+          <div class="metric-val">RT</div>
+          <div class="metric-label">REAL-TIME SCORES</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== MAIN CONTENT ===================== -->
+  <main class="main-content">
+    <div class="portal-grid">
+
+      <!-- === PANEL DEL JUEGO === -->
+      <section id="juego">
+        <div class="section-eyebrow">
+          <span class="eyebrow-tag"><i class="fa-solid fa-microchip"></i> MÓDULO 01 — ARENA</span>
+        </div>
+        <h2 class="section-title">KART ARENA <span class="text-accent">3D</span></h2>
+
+        <div class="terminal-panel">
+          <div class="terminal-header">
+            <div class="terminal-dots">
+              <span class="t-dot red"></span><span class="t-dot yellow"></span><span class="t-dot green"></span>
+            </div>
+            <span class="terminal-label">spider_kart.exe — three.js v128</span>
+            <span class="game-status-badge"><span class="sw-pulse"></span> EN DESARROLLO</span>
+          </div>
+
+          <div id="game-canvas-container">
+            <div id="canvas-overlay">
+              <div class="overlay-content">
+                <div class="overlay-icon"><i class="fa-solid fa-flag-checkered"></i></div>
+                <h3 class="overlay-title">PRÓXIMAMENTE</h3>
+                <p class="overlay-desc">El motor 3D está listo. El juego completo estará disponible pronto.</p>
+                <div class="overlay-tech"><span>THREE.JS</span><span>WEBGL</span><span>NODE.JS</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="game-panel__footer">
+            <span class="game-info-chip"><i class="fa-solid fa-circle-info"></i> Requiere WebGL</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- === LEADERBOARD === -->
+      <section id="leaderboard">
+        <div class="section-eyebrow">
+          <span class="eyebrow-tag"><i class="fa-solid fa-ranking-star"></i> MÓDULO 02 — RANKING</span>
+        </div>
+        <h2 class="section-title">TOP <span class="text-accent">PILOTOS</span></h2>
+
+        <div class="terminal-panel">
+          <div class="terminal-header">
+            <div class="terminal-dots">
+              <span class="t-dot red"></span><span class="t-dot yellow"></span><span class="t-dot green"></span>
+            </div>
+            <span class="terminal-label">leaderboard.sql — live</span>
+            <button class="lb-refresh-btn" onclick="loadLeaderboard()">
+              <i class="fa-solid fa-arrows-rotate"></i>
+            </button>
+          </div>
+
+          <div class="lb-table-wrap">
+            <table class="lb-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>PILOTO</th>
+                  <th>SCORE</th>
+                </tr>
+              </thead>
+              <tbody id="leaderboard-list">
+                <tr><td colspan="3"><div class="lb-spinner-wrap"><div class="sw-spinner"></div> Cargando...</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ===================== CONTACTO ===================== -->
+  <section class="contact-section" id="contacto">
+    <div class="contact-inner">
+      <div class="section-eyebrow"><span class="eyebrow-tag">MÓDULO 03 — CONTACTO</span></div>
+      <h2 class="section-title">ENCONTRANOS <span class="text-accent">AQUÍ</span></h2>
+      <p class="contact-desc">SpiderWebARG — Desarrollo web y soluciones digitales.</p>
+
+      <div class="contact-grid">
+        <a href="https://spider-web-test.vercel.app/" target="_blank" class="contact-card">
+          <div class="contact-card__icon"><i class="fa-solid fa-globe"></i></div>
+          <div class="contact-card__info">
+            <span class="contact-card__label">SITIO WEB</span>
+            <span class="contact-card__val">spider-web-test.vercel.app</span>
+          </div>
+        </a>
+        <a href="https://www.instagram.com/spiderweb.arg/" target="_blank" class="contact-card">
+          <div class="contact-card__icon"><i class="fa-brands fa-instagram"></i></div>
+          <div class="contact-card__info">
+            <span class="contact-card__label">INSTAGRAM</span>
+            <span class="contact-card__val">@spiderweb.arg</span>
+          </div>
+        </a>
+        <a href="mailto:officialspiderwebdesign@gmail.com" class="contact-card">
+          <div class="contact-card__icon"><i class="fa-solid fa-envelope"></i></div>
+          <div class="contact-card__info">
+            <span class="contact-card__label">CORREO</span>
+            <span class="contact-card__val">officialspiderwebdesign@gmail.com</span>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer class="sw-footer">
+    <div class="sw-footer__inner">
+      <span class="sw-footer__copy">© 2026 SPIDERWEBARG — UNDERCODE EVENT</span>
+      <span class="sw-footer__status"><span class="sw-pulse"></span> SYSTEM ONLINE</span>
+    </div>
+  </footer>
+
+  <!-- Scripts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="js/main.js"></script>
+  <script src="js/game-placeholder.js"></script>
+</body>
+</html>
