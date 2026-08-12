@@ -22,8 +22,11 @@ app.use(express.static(join(__dirname, 'public')));
 
 // Configuración de la API SpiderWebARG
 const SPIDER_API_URL = 'https://spiderwebargapi.com.ar/api/v1';
-const SPIDER_API_KEY = process.env.spiderapikey;
-const SPIDER_DB_NAME = process.env.spiderdbname;
+const SPIDER_API_KEY = process.env.spiderapikey || 'c20cdfd802d9e387d77176ee597ac66f26b9513bd15d2a95886d34befc0b7ad6';
+const SPIDER_DB_NAME = process.env.spiderdbname || 'sw_Franco Calegari_SpiderKart';
+
+// Flag para suprimir errores repetitivos de la misma naturaleza
+let _dbErrorLogged = false;
 
 async function executeQuery(query) {
     const response = await fetch(`${SPIDER_API_URL}/query`, {
@@ -39,9 +42,16 @@ async function executeQuery(query) {
     });
     
     if (!response.ok) {
-        throw new Error(`Error en la consulta: ${response.statusText}`);
+        const err = new Error(`Error en la consulta: ${response.statusText} (${response.status})`);
+        if (!_dbErrorLogged) {
+            _dbErrorLogged = true;
+            console.error('[DB] Error al conectar con SpiderWebARG API:', response.status, response.statusText);
+            console.error('[DB] Verificar que spiderapikey y spiderdbname sean correctos en .env');
+            setTimeout(() => { _dbErrorLogged = false; }, 60000); // permitir re-log tras 60s
+        }
+        throw err;
     }
-    
+    _dbErrorLogged = false;
     return await response.json();
 }
 

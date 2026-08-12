@@ -187,8 +187,28 @@
             <span class="game-status-badge"><span class="sw-pulse"></span> EN DESARROLLO</span>
           </div>
 
-          <div id="game-canvas-container">
+          <!-- Game Launch Panel -->
+          <div class="game-launch-panel" id="game-canvas-container">
+            <div class="glp-bg-grid"></div>
+            <div class="glp-inner">
+              <div class="glp-logo">
+                <span class="glp-logo-tag">[SK]</span>
+                <span class="glp-logo-name">SPIDER<span class="glp-logo-accent">KART</span></span>
+              </div>
+              <p class="glp-desc">Circuito completo · 5 vueltas · Cronómetro · Minimapa</p>
+              <div class="glp-features">
+                <div class="glp-feat"><i class="fa-solid fa-flag-checkered"></i> 5 VUELTAS</div>
+                <div class="glp-feat"><i class="fa-solid fa-stopwatch"></i> TIEMPO REAL</div>
+                <div class="glp-feat"><i class="fa-solid fa-map"></i> MINIMAPA</div>
+                <div class="glp-feat"><i class="fa-solid fa-wind"></i> DERRAPE</div>
+              </div>
+              <a href="game.html" target="_blank" class="sw-btn sw-btn--primary sw-btn--lg glp-play-btn" id="btn-launch-game">
+                <i class="fa-solid fa-gamepad"></i> JUGAR EN PANTALLA COMPLETA
+              </a>
+              <p class="glp-note">// Se abre en una pestaña nueva — WebGL requerido</p>
+            </div>
           </div>
+
           <div class="game-panel__footer">
             <span class="game-info-chip"><i class="fa-solid fa-circle-info"></i> Requiere WebGL</span>
           </div>
@@ -274,10 +294,61 @@
     </div>
   </footer>
 
-  <!-- Scripts -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- Scripts del portal (sin el motor de juego — ese vive en game.html) -->
   <script src="js/main.js"></script>
-  <script src="js/game-engine.js"></script>
-  <script src="js/multiplayer.js"></script>
+  <style>
+    /* === Game Launch Panel (index.html) === */
+    .game-launch-panel {
+      position: relative;
+      min-height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: #050508;
+    }
+    .glp-bg-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(163,0,0,0.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(163,0,0,0.07) 1px, transparent 1px);
+      background-size: 32px 32px;
+      animation: glpGridPulse 4s ease-in-out infinite alternate;
+    }
+    @keyframes glpGridPulse { from { opacity: 0.5; } to { opacity: 1; } }
+    .glp-inner {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 18px;
+      padding: 40px 20px; text-align: center;
+    }
+    .glp-logo { display: flex; align-items: baseline; gap: 10px; }
+    .glp-logo-tag { font-family: 'Share Tech Mono', monospace; color: var(--sw-red); font-size: 1rem; }
+    .glp-logo-name {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 900; font-size: 3.5rem;
+      color: #f5f5f5; letter-spacing: 2px;
+      text-shadow: 0 0 40px rgba(163,0,0,0.5);
+    }
+    .glp-logo-accent { color: var(--sw-red); }
+    .glp-desc { font-family: 'Share Tech Mono', monospace; font-size: 0.72rem; color: rgba(255,255,255,0.45); letter-spacing: 0.15em; }
+    .glp-features {
+      display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+    }
+    .glp-feat {
+      font-family: 'Share Tech Mono', monospace; font-size: 0.65rem;
+      color: rgba(255,255,255,0.6); letter-spacing: 0.12em;
+      border: 1px solid rgba(163,0,0,0.3); padding: 5px 12px;
+      clip-path: polygon(6px 0,100% 0,100% 100%,0 100%,0 6px);
+    }
+    .glp-feat i { color: var(--sw-red); margin-right: 5px; }
+    .glp-play-btn {
+      font-size: 0.9rem !important; padding: 14px 36px !important;
+      box-shadow: 0 0 30px rgba(163,0,0,0.4);
+      transition: box-shadow 0.3s, transform 0.2s !important;
+    }
+    .glp-play-btn:hover { box-shadow: 0 0 50px rgba(163,0,0,0.7); transform: translateY(-2px); }
+    .glp-note { font-family: 'Share Tech Mono', monospace; font-size: 0.6rem; color: rgba(255,255,255,0.25); letter-spacing: 0.1em; }
+  </style>
 </body>
 </html>

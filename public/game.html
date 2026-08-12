@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpiderKart — ARENA 3D | SpiderWebARG</title>
+  <meta name="description" content="SpiderKart — Juego de karts 3D en el navegador. 5 vueltas, cronómetro en tiempo real, minimapa y mecánica de derrape. Por SpiderWebARG.">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: 'Share Tech Mono', monospace;
+    }
+
+    /* ─── Contenedor del render 3D ─── */
+    #game-canvas-container {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+    }
+    #game-canvas-container canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* ─── Pantalla de carga ─── */
+    #loading-screen {
+      position: fixed; inset: 0; z-index: 100;
+      background: #000;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 20px;
+    }
+    .ls-logo { font-family: 'Barlow Condensed', sans-serif; font-size: 4rem; font-weight: 900; color: #f5f5f5; letter-spacing: 3px; }
+    .ls-logo span { color: #a30000; }
+    .ls-sub { font-size: 0.7rem; letter-spacing: 0.3em; color: rgba(255,255,255,0.3); }
+    .ls-bar-wrap { width: 200px; height: 3px; background: rgba(255,255,255,0.1); }
+    .ls-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #6b0000, #a30000); transition: width 0.3s; }
+
+    /* ─── HUD sobre el canvas ─── */
+    #sk-hud {
+      position: fixed; inset: 0; z-index: 10;
+      pointer-events: none;
+      font-family: 'Share Tech Mono', monospace;
+      color: #f5f5f5;
+    }
+
+    /* Velocímetro */
+    .sk-hud-speed {
+      position: absolute; bottom: 24px; left: 28px;
+      display: flex; align-items: baseline; gap: 6px;
+    }
+    .sk-hud-val {
+      font-size: 3.2rem; font-weight: 900; color: #a30000;
+      text-shadow: 0 0 24px rgba(163,0,0,0.9);
+      font-family: 'Barlow Condensed', sans-serif;
+      transition: color 0.1s;
+    }
+    .sk-hud-val.boosting { color: #ff6600; text-shadow: 0 0 30px rgba(255,102,0,0.9); }
+    .sk-hud-unit { font-size: 0.7rem; letter-spacing: 0.2em; color: #555; }
+
+    /* Vuelta & tiempo */
+    .sk-hud-top-right {
+      position: absolute; top: 14px; right: 24px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    }
+    .sk-hud-lap {
+      font-size: 0.9rem; letter-spacing: 0.15em; font-weight: 700;
+      color: #fff; background: rgba(163,0,0,0.25);
+      border: 1px solid rgba(163,0,0,0.5);
+      padding: 5px 12px;
+      clip-path: polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    }
+    .sk-hud-timer {
+      font-size: 1.6rem; color: #f5f5f5;
+      text-shadow: 0 0 16px rgba(255,255,255,0.3);
+    }
+    .sk-hud-lap-split {
+      font-size: 0.65rem; color: rgba(255,255,255,0.45); letter-spacing: 0.1em;
+    }
+    .sk-hud-best {
+      font-size: 0.65rem; color: #ffcc00; letter-spacing: 0.1em;
+    }
+
+    /* Barra de progreso de vuelta */
+    .sk-hud-progress {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      width: 220px;
+    }
+    .sk-hud-progress-label {
+      font-size: 0.55rem; letter-spacing: 0.18em; color: rgba(255,255,255,0.3);
+      text-align: center; margin-bottom: 4px;
+    }
+    .sk-hud-progress-bar {
+      width: 100%; height: 4px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(163,0,0,0.25);
+    }
+    .sk-hud-progress-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg,#a30000,#ff6600);
+      transition: width 0.15s linear;
+    }
+
+    /* Power bar */
+    .sk-hud-power {
+      position: absolute; bottom: 24px; right: 24px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+    }
+    .sk-hud-label { font-size: 0.6rem; letter-spacing: 0.2em; color: #555; }
+    .sk-hud-bar {
+      width: 120px; height: 6px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(163,0,0,0.3);
+      clip-path: polygon(0 0,calc(100% - 4px) 0,100% 4px,100% 100%,4px 100%,0 calc(100% - 4px));
+    }
+    .sk-hud-fill {
+      height: 100%; width: 100%;
+      background: linear-gradient(90deg,#6b0000,#a30000);
+      transition: width 0.1s;
+      box-shadow: 0 0 8px rgba(163,0,0,0.6);
+    }
+
+    /* Controles — esquina inferior centro */
+    .sk-hud-controls {
+      position: absolute; bottom: 8px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; gap: 20px;
+      font-size: 0.52rem; letter-spacing: 0.14em;
+      color: rgba(255,255,255,0.2);
+    }
+
+    /* Boost FX */
+    .sk-hud-power-fx {
+      position: absolute; top: 48%; left: 50%;
+      transform: translate(-50%,-50%);
+      font-size: 1.3rem; letter-spacing: 0.3em;
+      color: #ff6600; text-shadow: 0 0 30px #ff3300;
+      animation: skPulse 0.4s ease-in-out infinite alternate;
+    }
+    .sk-hud-power-fx.hidden { display: none; }
+
+    /* Item FX */
+    .sk-hud-item-fx {
+      position: absolute; top: 40%; left: 50%;
+      transform: translate(-50%,-50%);
+      font-size: 1.1rem; letter-spacing: 0.25em;
+      color: #ffcc00; text-shadow: 0 0 24px #ff9500;
+      animation: skItemPop 0.6s ease-out forwards;
+    }
+    .sk-hud-item-fx.hidden { display: none; }
+
+    /* Sentido contrario */
+    #hud-wrong-way {
+      position: absolute; top: 35%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 2rem; letter-spacing: 0.25em; font-weight: 900;
+      color: #ff0000; text-shadow: 0 0 40px rgba(255,0,0,0.8), 0 0 80px rgba(255,0,0,0.4);
+      font-family: 'Barlow Condensed', sans-serif;
+      animation: wrongWayPulse 0.5s ease-in-out infinite alternate;
+    }
+    #hud-wrong-way.hidden { display: none; }
+    @keyframes wrongWayPulse {
+      from { opacity: 0.5; transform: translate(-50%,-50%) scale(0.96); }
+      to   { opacity: 1;   transform: translate(-50%,-50%) scale(1.04); }
+    }
+
+    /* Drift indicator */
+    #hud-drift {
+      position: absolute; bottom: 80px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.8rem; letter-spacing: 0.2em;
+      color: #ff6600; text-shadow: 0 0 20px #ff3300;
+      transition: opacity 0.2s;
+    }
+    #hud-drift.hidden { display: none; }
+    .drift-bar-wrap { width: 140px; height: 5px; background: rgba(255,255,255,0.08); margin: 4px auto 0; }
+    .drift-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#ff6600,#ffcc00); border-radius: 2px; }
+
+    /* Minimapa */
+    #hud-minimap {
+      position: absolute; bottom: 24px; left: 50%;
+      transform: translateX(-50%);
+      width: 140px; height: 140px;
+      background: rgba(0,0,0,0.65);
+      border: 1px solid rgba(163,0,0,0.4);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #minimap-canvas { width: 100%; height: 100%; display: block; }
+
+    /* Pantalla de victoria */
+    #finish-screen {
+      position: fixed; inset: 0; z-index: 50;
+      background: rgba(0,0,0,0.92);
+      display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 22px;
+      backdrop-filter: blur(8px);
+    }
+    #finish-screen.active { display: flex; }
+    .fs-tag { font-size: 0.7rem; letter-spacing: 0.3em; color: var(--sw-red, #a30000); }
+    .fs-title { font-family: 'Barlow Condensed', sans-serif; font-size: 4rem; font-weight: 900; color: #f5f5f5; letter-spacing: 3px; }
+    .fs-title span { color: #a30000; }
+    .fs-times { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+    .fs-time-row { font-size: 1rem; letter-spacing: 0.15em; color: rgba(255,255,255,0.7); }
+    .fs-time-row strong { color: #fff; }
+    .fs-time-row.best strong { color: #ffcc00; }
+    .fs-actions { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+    .fs-btn {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.75rem; letter-spacing: 0.12em;
+      padding: 12px 28px; cursor: pointer;
+      clip-path: polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));
+      border: none; transition: all 0.2s;
+    }
+    .fs-btn-primary { background: #a30000; color: #fff; }
+    .fs-btn-primary:hover { background: #c40000; box-shadow: 0 0 24px rgba(163,0,0,0.6); }
+    .fs-btn-ghost { background: transparent; color: rgba(255,255,255,0.6); border: 1px solid rgba(255,255,255,0.2); }
+    .fs-btn-ghost:hover { color: #fff; border-color: rgba(255,255,255,0.5); }
+
+    @keyframes skPulse {
+      from { opacity: 0.6; transform: translate(-50%,-50%) scale(0.95); }
+      to   { opacity: 1;   transform: translate(-50%,-50%) scale(1.05); }
+    }
+    @keyframes skItemPop {
+      0%   { opacity: 0;   transform: translate(-50%,-50%) scale(0.7); }
+      20%  { opacity: 1;   transform: translate(-50%,-50%) scale(1.1); }
+      80%  { opacity: 1;   transform: translate(-50%,-50%) scale(1); }
+      100% { opacity: 0;   transform: translate(-50%,-60%) scale(1); }
+    }
+
+    /* Botón volver */
+    #btn-back-portal {
+      position: fixed; top: 14px; left: 20px; z-index: 20;
+      pointer-events: auto;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.65rem; letter-spacing: 0.1em;
+      color: rgba(255,255,255,0.35);
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(163,0,0,0.25);
+      padding: 6px 12px; cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+      text-decoration: none;
+    }
+    #btn-back-portal:hover { color: #fff; border-color: rgba(163,0,0,0.6); }
+  </style>
+</head>
+<body>
+
+  <!-- Pantalla de carga -->
+  <div id="loading-screen">
+    <div class="ls-logo">SPIDER<span>KART</span></div>
+    <div class="ls-sub">CARGANDO ARENA 3D...</div>
+    <div class="ls-bar-wrap"><div class="ls-bar" id="ls-bar"></div></div>
+  </div>
+
+  <!-- Botón de regreso al portal -->
+  <a href="/" id="btn-back-portal"><i class="fa-solid fa-arrow-left"></i> PORTAL</a>
+
+  <!-- Canvas del juego -->
+  <div id="game-canvas-container"></div>
+
+  <!-- HUD -->
+  <div id="sk-hud">
+
+    <!-- TOP-CENTER: Barra de progreso de vuelta -->
+    <div class="sk-hud-progress">
+      <div class="sk-hud-progress-label" id="hud-progress-label">PROGRESO VUELTA</div>
+      <div class="sk-hud-progress-bar">
+        <div class="sk-hud-progress-fill" id="hud-progress-fill"></div>
+      </div>
+    </div>
+
+    <!-- TOP-RIGHT: Vuelta, cronómetro, best lap -->
+    <div class="sk-hud-top-right">
+      <div class="sk-hud-lap" id="hud-lap">VUELTA 1 / 5</div>
+      <div class="sk-hud-timer" id="hud-timer">0:00.000</div>
+      <div class="sk-hud-lap-split" id="hud-lap-time">VUELTA: --:--.---</div>
+      <div class="sk-hud-best" id="hud-best-lap">MEJOR: --:--.---</div>
+    </div>
+
+    <!-- BOTTOM-LEFT: Velocímetro -->
+    <div class="sk-hud-speed">
+      <span class="sk-hud-val" id="hud-speed">0</span>
+      <span class="sk-hud-unit">KM/H</span>
+    </div>
+
+    <!-- BOTTOM-CENTER: Minimapa -->
+    <div id="hud-minimap">
+      <canvas id="minimap-canvas" width="140" height="140"></canvas>
+    </div>
+
+    <!-- BOTTOM-RIGHT: Power bar -->
+    <div class="sk-hud-power">
+      <span class="sk-hud-label">[ K ] POWER</span>
+      <div class="sk-hud-bar"><div class="sk-hud-fill" id="hud-power-fill"></div></div>
+    </div>
+
+    <!-- BOTTOM: Controles -->
+    <div class="sk-hud-controls">
+      <span>WASD / FLECHAS — MOVER</span>
+      <span>SPACE — SALTAR</span>
+      <span>SPACE + GIRO — DERRAPE</span>
+      <span>K — PODER</span>
+    </div>
+
+    <!-- FX Overlays -->
+    <div class="sk-hud-power-fx hidden" id="hud-power-fx">BOOST ACTIVO</div>
+    <div class="sk-hud-item-fx hidden" id="hud-item-fx">ITEM RECOGIDO</div>
+    <div id="hud-wrong-way" class="hidden">SENTIDO CONTRARIO</div>
+    <div id="hud-drift" class="hidden">
+      DERRAPE
+      <div class="drift-bar-wrap"><div class="drift-bar" id="drift-bar"></div></div>
+    </div>
+  </div>
+
+  <!-- Pantalla de victoria / fin de carrera -->
+  <div id="finish-screen">
+    <div class="fs-tag">// CARRERA COMPLETADA</div>
+    <div class="fs-title">FINISH <span>LINE</span></div>
+    <div class="fs-times">
+      <div class="fs-time-row">TIEMPO TOTAL: <strong id="fs-total-time">--</strong></div>
+      <div class="fs-time-row best">MEJOR VUELTA: <strong id="fs-best-time">--</strong></div>
+    </div>
+    <div class="fs-actions">
+      <button class="fs-btn fs-btn-primary" onclick="location.reload()">
+        <i class="fa-solid fa-rotate-right"></i> OTRA VEZ
+      </button>
+      <a href="/" class="fs-btn fs-btn-ghost">
+        <i class="fa-solid fa-house"></i> PORTAL
+      </a>
+    </div>
+  </div>
+
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <!-- Animación de carga -->
+  <script>
+    let loadPct = 0;
+    const lsBar = document.getElementById('ls-bar');
+    const lsScreen = document.getElementById('loading-screen');
+    const lsInterval = setInterval(() => {
+      loadPct = Math.min(loadPct + Math.random() * 15, 88);
+      if (lsBar) lsBar.style.width = loadPct + '%';
+    }, 100);
+    window._finishLoading = function() {
+      clearInterval(lsInterval);
+      if (lsBar) lsBar.style.width = '100%';
+      setTimeout(() => {
+        if (lsScreen) { lsScreen.style.transition = 'opacity 0.5s'; lsScreen.style.opacity = '0'; }
+        setTimeout(() => { if (lsScreen) lsScreen.style.display = 'none'; }, 500);
+      }, 300);
+    };
+  </script>
+
+  <!-- Motor de juego -->
+  <script src="js/game-engine.js"></script>
+  <script src="js/multiplayer.js"></script>
+</body>
+</html>

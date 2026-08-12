@@ -46,10 +46,19 @@ async function loadLeaderboard() {
             listContainer.innerHTML = '';
             data.data.forEach((item, index) => {
                 const tr = document.createElement('tr');
-                const rankText = index === 0 ? '🏆' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`;
+                let rankHtml;
+                if (index === 0) {
+                    rankHtml = '<i class="fa-solid fa-trophy" style="color:#FFD700;"></i>';
+                } else if (index === 1) {
+                    rankHtml = '<i class="fa-solid fa-trophy" style="color:#C0C0C0;"></i>';
+                } else if (index === 2) {
+                    rankHtml = '<i class="fa-solid fa-trophy" style="color:#CD7F32;"></i>';
+                } else {
+                    rankHtml = `#${index + 1}`;
+                }
                 
                 tr.innerHTML = `
-                    <td>${rankText}</td>
+                    <td>${rankHtml}</td>
                     <td>${item.username}</td>
                     <td style="color:var(--sw-red); font-weight:bold;">${item.score} PTS</td>
                 `;
@@ -99,8 +108,8 @@ document.addEventListener('DOMContentLoaded', () => {
     checkSession();
     loadLeaderboard();
     
-    // Configurar polling para el leaderboard (cada 30s)
-    setInterval(loadLeaderboard, 30000);
+    // Configurar polling para el leaderboard (cada 2 min)
+    setInterval(loadLeaderboard, 120000);
 
     // Registro
     document.getElementById('register-form').addEventListener('submit', async (e) => {
