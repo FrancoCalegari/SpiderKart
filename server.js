@@ -5,11 +5,15 @@ import bcrypt from 'bcrypt';
 import fetch from 'node-fetch';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { WebSocketServer } from 'ws';
+import { createServer } from 'http';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const server = createServer(app);
+const wss = new WebSocketServer({ server });
 
 // Configuración de middleware
 app.use(cors());
@@ -45,7 +49,10 @@ async function executeQuery(query) {
         const err = new Error(`Error en la consulta: ${response.statusText} (${response.status})`);
         if (!_dbErrorLogged) {
             _dbErrorLogged = true;
+            const errText = await response.text();
             console.error('[DB] Error al conectar con SpiderWebARG API:', response.status, response.statusText);
+            console.error('[DB] Query original:', query);
+            console.error('[DB] Respuesta del servidor:', errText);
             console.error('[DB] Verificar que spiderapikey y spiderdbname sean correctos en .env');
             setTimeout(() => { _dbErrorLogged = false; }, 60000); // permitir re-log tras 60s
         }
@@ -97,7 +104,7 @@ app.post('/api/auth/register', async (req, res) => {
         const checkQuery = `SELECT * FROM users WHERE username = '${username}'`;
         const checkResult = await executeQuery(checkQuery);
         
-        if (checkResult.data && checkResult.data.length > 0) {
+        if (checkResult.result && checkResult.result.length > 0) {
             return res.status(400).json({ error: 'El usuario ya existe' });
         }
 
@@ -129,11 +136,11 @@ app.post('/api/auth/login', async (req, res) => {
         const query = `SELECT * FROM users WHERE username = '${username}'`;
         const result = await executeQuery(query);
         
-        if (!result.data || result.data.length === 0) {
+        if (!result.result || result.result.length === 0) {
             return res.status(401).json({ error: 'Credenciales inválidas' });
         }
 
-        const user = result.data[0];
+        const user = result.result[0];
         const match = await bcrypt.compare(password, user.password_hash);
 
         if (!match) {
@@ -158,7 +165,7 @@ app.get('/api/leaderboard', async (req, res) => {
             LIMIT 10
         `;
         const result = await executeQuery(query);
-        res.json({ data: result.data || [] });
+        res.json({ data: result.result || [] });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error obteniendo leaderboard' });
@@ -178,6 +185,206 @@ app.post('/api/leaderboard', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Servidor corriendo en http://localhost:${PORT}`);
+// ---------------------------------------------------------
+// Lógica de Salas y WebSockets (Multijugador)
+// ---------------------------------------------------------
+const rooms = {}; // roomName -> { phase, laps, players: [{ws, id, name, ready, color, timeMs}] }
+const playersGlobal = {}; // id -> { ws, room, id, name }
+const MIN_PLAYERS = 2;
+
+function getRoom(roomName) {
+    if (!rooms[roomName]) {
+        rooms[roomName] = { phase: 'waiting', laps: 3, players: [] };
+    }
+    return rooms[roomName];
+}
+
+function broadcastToRoom(roomName, msg, excludeWs = null) {
+    const room = rooms[roomName];
+    if (!room) return;
+    const msgStr = JSON.stringify(msg);
+    room.players.forEach(p => {
+        if (p.ws !== excludeWs && p.ws.readyState === 1 /* OPEN */) {
+            p.ws.send(msgStr);
+        }
+    });
+}
+
+function handleLeave(ws) {
+    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+    if (!playerGlobal) return;
+    
+    const { room: roomName, id } = playerGlobal;
+    const room = rooms[roomName];
+    if (room) {
+        room.players = room.players.filter(p => p.id !== id);
+        broadcastToRoom(roomName, { type: 'player_left', id });
+        
+        if (room.players.length === 0) {
+            delete rooms[roomName];
+        } else if (room.players.length < MIN_PLAYERS && room.phase !== 'racing' && room.phase !== 'finished') {
+            room.phase = 'waiting';
+            if (room.countdownInterval) clearInterval(room.countdownInterval);
+            broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+        }
+    }
+    delete playersGlobal[id];
+}
+
+function startCountdown(roomName) {
+    const room = rooms[roomName];
+    if (!room) return;
+    room.phase = 'countdown';
+    let seconds = 5;
+    
+    broadcastToRoom(roomName, { type: 'countdown', seconds });
+    
+    room.countdownInterval = setInterval(() => {
+        seconds--;
+        if (seconds > 0) {
+            broadcastToRoom(roomName, { type: 'countdown', seconds });
+        } else {
+            clearInterval(room.countdownInterval);
+            if (room.players.length >= MIN_PLAYERS) {
+                room.phase = 'racing';
+                broadcastToRoom(roomName, { type: 'race_start', laps: room.laps });
+            } else {
+                room.phase = 'waiting';
+                broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+            }
+        }
+    }, 1000);
+}
+
+function checkRaceFinish(roomName) {
+    const room = rooms[roomName];
+    if (!room) return;
+    
+    const allFinished = room.players.every(p => p.timeMs > 0);
+    if (allFinished) {
+        room.phase = 'finished';
+        const results = room.players
+            .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs }))
+            .sort((a, b) => a.timeMs - b.timeMs)
+            .map((r, idx) => ({ ...r, position: idx + 1 }));
+            
+        // Opcional: Aquí se podría integrar la lógica para guardar el puntaje en SpiderWebARG
+        // usando executeQuery() si los jugadores están validados.
+        
+        broadcastToRoom(roomName, { type: 'race_results', results, saved: false });
+        
+        // Reiniciar la sala después de un tiempo
+        setTimeout(() => {
+            if (!rooms[roomName]) return;
+            room.players.forEach(p => p.timeMs = 0);
+            room.phase = 'waiting';
+            if (room.players.length >= MIN_PLAYERS) {
+                startCountdown(roomName);
+            } else {
+                broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+            }
+        }, 10000);
+    }
+}
+
+wss.on('connection', (ws) => {
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            const { type, room: roomName, name, pilotId, timeMs, lap } = data;
+
+            switch (type) {
+                case 'join': {
+                    if (!roomName || !name) return;
+                    const id = pilotId || 'pilot_' + Math.random().toString(36).substr(2, 9);
+                    const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+                    
+                    const room = getRoom(roomName);
+                    
+                    if (room.phase === 'racing' || room.phase === 'countdown') {
+                        ws.send(JSON.stringify({ type: 'error', message: 'La carrera ya empezó' }));
+                        return;
+                    }
+
+                    // Limpiar sesión previa si se reconecta rápido
+                    if (playersGlobal[id]) {
+                        handleLeave(playersGlobal[id].ws);
+                    }
+
+                    const player = { ws, id, name, ready: true, color, timeMs: 0, position: 0 };
+                    room.players.push(player);
+                    playersGlobal[id] = { ws, room: roomName, id, name };
+
+                    ws.send(JSON.stringify({
+                        type: 'joined',
+                        room: roomName,
+                        playerId: id,
+                        players: room.players.map(p => ({ id: p.id, name: p.name, color: p.color, ready: p.ready }))
+                    }));
+
+                    broadcastToRoom(roomName, {
+                        type: 'player_joined',
+                        id, name, color
+                    }, ws);
+
+                    if (room.players.length >= MIN_PLAYERS && room.phase === 'waiting') {
+                        startCountdown(roomName);
+                    } else if (room.phase === 'waiting') {
+                        broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+                    }
+                    break;
+                }
+                
+                case 'state': {
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+                    if (!playerGlobal) return;
+                    const { x, y, z, angle, speed, boosting } = data;
+                    broadcastToRoom(playerGlobal.room, {
+                        type: 'state',
+                        id: playerGlobal.id,
+                        x, y, z, angle, speed, boosting, lap
+                    }, ws);
+                    break;
+                }
+
+                case 'finish': {
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+                    if (!playerGlobal) return;
+                    const room = rooms[playerGlobal.room];
+                    if (!room) return;
+                    
+                    const player = room.players.find(p => p.id === playerGlobal.id);
+                    if (player) {
+                        player.timeMs = timeMs;
+                        checkRaceFinish(playerGlobal.room);
+                    }
+                    break;
+                }
+                
+                case 'hit': {
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+                    if (!playerGlobal) return;
+                    broadcastToRoom(playerGlobal.room, {
+                        type: 'hit',
+                        targetId: data.targetId,
+                        sourceId: playerGlobal.id
+                    }, ws);
+                    break;
+                }
+                
+                case 'leave': {
+                    handleLeave(ws);
+                    break;
+                }
+            }
+        } catch (e) {
+            console.error('WS Error:', e);
+        }
+    });
+
+    ws.on('close', () => handleLeave(ws));
+});
+
+server.listen(PORT, () => {
+    console.log(`Servidor HTTP y WebSocket corriendo en el puerto ${PORT}`);
 });

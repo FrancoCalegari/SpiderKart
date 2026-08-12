@@ -57,7 +57,8 @@
   const container = document.getElementById('game-canvas-container');
   if (!container) return;
 
-  const WS_URL = window.SPIDERKART_WS_URL || 'wss://backend-pendiente.example/ws/spiderkart';
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const WS_URL = window.SPIDERKART_WS_URL || `${protocol}//${window.location.host}`;
   const STATE_HZ = 12;
   const MAX_RETRIES = 3;
   const DEFAULT_LAPS = 3;
@@ -139,7 +140,11 @@
           <input id="sk-mp-name" class="sk-mp-input sk-mp-input-wide" maxlength="12" placeholder="Nombre de piloto" />
         </div>
         <div class="sk-mp-row">
+          <input type="password" id="sk-mp-password" class="sk-mp-input sk-mp-input-wide" placeholder="Contraseña" />
+        </div>
+        <div class="sk-mp-row">
           <button id="sk-mp-login" class="sk-mp-btn">Iniciar sesión</button>
+          <button id="sk-mp-register" class="sk-mp-btn" style="margin-left: 6px;">Registrarse</button>
         </div>
       </div>
 
@@ -226,7 +231,9 @@
   const sessionSection = document.getElementById('sk-mp-session-section');
   const roomSection = document.getElementById('sk-mp-room-section');
   const nameInput = document.getElementById('sk-mp-name');
+  const passwordInput = document.getElementById('sk-mp-password');
   const loginBtn = document.getElementById('sk-mp-login');
+  const registerBtn = document.getElementById('sk-mp-register');
   const pilotLabel = document.getElementById('sk-mp-pilot');
   const roomInput = document.getElementById('sk-mp-room');
   const joinBtn = document.getElementById('sk-mp-join');
@@ -287,15 +294,64 @@
      Login (sesión) — sin sesión no se puede unir a una sala, porque
      no hay a nombre de quién guardar nada.
   ────────────────────────────────────────── */
-  loginBtn.addEventListener('click', () => {
+  loginBtn.addEventListener('click', async () => {
     const name = (nameInput.value || '').trim().slice(0, 12);
-    if (!name) {
-      nameInput.placeholder = 'Ingresá un nombre';
+    const password = (passwordInput.value || '').trim();
+    if (!name || !password) {
+      setStatus('FALTAN DATOS', false);
       nameInput.focus();
       return;
     }
-    session = startSession(name);
-    renderSessionUI();
+    loginBtn.disabled = true;
+    setStatus('CONECTANDO...', false);
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: name, password })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            session = startSession(name);
+            session.userId = data.userId;
+            renderSessionUI();
+            setStatus('LOGIN OK', true);
+        } else {
+            setStatus(data.error || 'ERROR LOGIN', false);
+        }
+    } catch (e) {
+        setStatus('ERROR SERVIDOR', false);
+    }
+    loginBtn.disabled = false;
+  });
+
+  registerBtn.addEventListener('click', async () => {
+    const name = (nameInput.value || '').trim().slice(0, 12);
+    const password = (passwordInput.value || '').trim();
+    if (!name || !password) {
+      setStatus('FALTAN DATOS', false);
+      nameInput.focus();
+      return;
+    }
+    registerBtn.disabled = true;
+    setStatus('REGISTRANDO...', false);
+    try {
+        const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: name, password })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            setStatus('REGISTRO OK. INICIA SESIÓN', true);
+            passwordInput.value = '';
+        } else {
+            setStatus(data.error || 'ERROR REGISTRO', false);
+        }
+    } catch (e) {
+        setStatus('ERROR SERVIDOR', false);
+    }
+    registerBtn.disabled = false;
   });
 
   logoutBtn.addEventListener('click', () => {
@@ -461,6 +517,11 @@
       case 'countdown':
         race.phase = 'countdown';
         setRaceStatus('¡LARGADA EN ' + msg.seconds + '…!');
+        if (msg.seconds === 5 && window.SpiderKart) {
+          // Bloquear a los jugadores y moverlos a la salida con offset basado en su posición
+          const myPos = Object.keys(players).indexOf(playerId);
+          window.SpiderKart.lockAndReset(myPos);
+        }
         break;
 
       case 'race_start':
@@ -468,7 +529,10 @@
         race.laps = msg.laps || DEFAULT_LAPS;
         race.startedAt = performance.now();
         race.finished = false;
-        if (window.SpiderKart) window.SpiderKart.resetRace();
+        if (window.SpiderKart) {
+          window.SpiderKart.resetRace();
+          window.SpiderKart.unlock();
+        }
         setRaceStatus('¡EN CARRERA! ' + race.laps + ' vueltas.');
         break;
 
@@ -481,6 +545,14 @@
         if (msg.id === playerId) return; // nunca aplicar el propio eco
         if (window.SpiderKart) {
           window.SpiderKart.applyRemoteState(msg.id, msg, players[msg.id] || {});
+        }
+        break;
+
+      case 'hit':
+        if (msg.targetId === playerId && window.SpiderKart) {
+          window.SpiderKart.spinOut();
+        } else if (window.SpiderKart && msg.targetId !== playerId) {
+          // Opcionalmente podemos hacer animar un trompo en el fantasma remoto
         }
         break;
 
@@ -556,6 +628,11 @@
     isDebugMode: () => DEBUG_MODE,
     getSession,
     minPlayers: MIN_PLAYERS,
-    defaultLaps: DEFAULT_LAPS
+    defaultLaps: DEFAULT_LAPS,
+    sendHit: (targetId) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'hit', targetId }));
+      }
+    }
   };
 })();

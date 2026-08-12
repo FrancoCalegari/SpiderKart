@@ -651,8 +651,13 @@
     lastLapTime: -1,
     bestLap: -1,
     raceFinished: false,
-    raceEndTime: 0
+    raceEndTime: 0,
+    isLocked: false,
+    heldItem: null, // 'boost', 'missile', 'homing'
+    spinOutTimer: 0
   };
+
+  const activeMissiles = [];
 
   const ACCEL      = 0.012;
   const MAX_SPEED  = 0.6;
@@ -827,11 +832,17 @@
           p.respawnTimer = POWERUP_RESPAWN;
           p.mesh.visible = false;
           spawnPickupBurst(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z);
-          state.powerCooldown = 0;
-          state.powerTimer = Math.max(state.powerTimer, 1.6);
+          
+          if (!state.heldItem) {
+            const rand = Math.random();
+            if (rand < 0.33) state.heldItem = 'boost';
+            else if (rand < 0.66) state.heldItem = 'missile';
+            else state.heldItem = 'homing';
+          }
 
           if (hudItemFx) {
             hudItemFx.classList.remove('hidden');
+            hudItemFx.textContent = state.heldItem.toUpperCase();
             void hudItemFx.offsetWidth;
             hudItemFx.style.animation = 'none';
             requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
@@ -849,12 +860,127 @@
   }
 
   /* ──────────────────────────────────────────
+     Missiles (Misiles y Misiles Teledirigidos)
+  ────────────────────────────────────────── */
+  const missileGeo = new THREE.CylinderGeometry(0.2, 0.2, 1.2, 8);
+  missileGeo.rotateX(Math.PI / 2);
+  const missileMatGreen = new THREE.MeshStandardMaterial({ color: 0x00ff00, roughness: 0.4 });
+  const missileMatRed = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.4 });
+
+  function spawnMissile(type) {
+    const isHoming = type === 'homing';
+    const mesh = new THREE.Mesh(missileGeo, isHoming ? missileMatRed : missileMatGreen);
+    // Posicionar adelante del kart
+    const startX = state.posX + Math.cos(state.angle) * 2;
+    const startZ = state.posZ + Math.sin(state.angle) * 2;
+    mesh.position.set(startX, state.posY + 0.5, startZ);
+    mesh.rotation.y = -state.angle + Math.PI / 2;
+    scene.add(mesh);
+    
+    activeMissiles.push({
+      mesh,
+      type,
+      x: startX, y: state.posY + 0.5, z: startZ,
+      angle: state.angle,
+      speed: 1.2, // Doble de rápido que un kart
+      life: 5.0 // Segundos antes de desaparecer
+    });
+  }
+
+  function updateMissiles(dt) {
+    for (let i = activeMissiles.length - 1; i >= 0; i--) {
+      const m = activeMissiles[i];
+      m.life -= dt;
+      if (m.life <= 0) {
+        scene.remove(m.mesh);
+        activeMissiles.splice(i, 1);
+        continue;
+      }
+
+      if (m.type === 'homing') {
+        // Buscar el kart más cercano por delante
+        let bestTarget = null;
+        let bestDist = Infinity;
+        for (const id in remoteKarts) {
+          const rk = remoteKarts[id];
+          const dx = rk.pos.x - m.x;
+          const dz = rk.pos.z - m.z;
+          const dist = Math.sqrt(dx*dx + dz*dz);
+          if (dist < 40) { // Rango de visión
+            const angleToTarget = Math.atan2(dz, dx);
+            const angleDiff = Math.abs(shortestAngleDiff(m.angle, angleToTarget));
+            if (angleDiff < Math.PI / 3 && dist < bestDist) { // Solo si está más o menos en frente
+              bestDist = dist;
+              bestTarget = rk;
+            }
+          }
+        }
+        if (bestTarget) {
+          const dx = bestTarget.pos.x - m.x;
+          const dz = bestTarget.pos.z - m.z;
+          const targetAngle = Math.atan2(dz, dx);
+          const diff = shortestAngleDiff(m.angle, targetAngle);
+          m.angle += diff * Math.min(1, dt * 4); // Girar hacia el objetivo
+        }
+      }
+
+      m.x += Math.cos(m.angle) * m.speed;
+      m.z += Math.sin(m.angle) * m.speed;
+      m.mesh.position.set(m.x, m.y, m.z);
+      m.mesh.rotation.y = -m.angle + Math.PI / 2;
+
+      // Colisión con otros karts
+      let hitSomeone = false;
+      for (const id in remoteKarts) {
+        const rk = remoteKarts[id];
+        const dx = rk.pos.x - m.x;
+        const dz = rk.pos.z - m.z;
+        if (dx*dx + dz*dz < 4) { // Radio de colisión 2^2
+          hitSomeone = true;
+          spawnPickupBurst(m.x, m.y, m.z); // Explosión visual
+          if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.sendHit) {
+            window.SpiderKartMultiplayer.sendHit(id);
+          }
+          break;
+        }
+      }
+
+      if (hitSomeone) {
+        scene.remove(m.mesh);
+        activeMissiles.splice(i, 1);
+      }
+    }
+  }
+
+  /* ──────────────────────────────────────────
      Game Loop
   ────────────────────────────────────────── */
   const clock = new THREE.Clock();
 
   function update(dt) {
     if (state.raceFinished) return; // congelar al terminar
+    
+    updateMissiles(dt);
+
+    // ── Bloqueo de largada ──
+    if (state.isLocked) {
+      updateRemoteKarts(dt);
+      return;
+    }
+
+    // ── Trompo (Spin Out) ──
+    if (state.spinOutTimer > 0) {
+      state.spinOutTimer -= dt;
+      state.speed *= 0.9;
+      state.posX += Math.cos(state.angle) * state.speed;
+      state.posZ += Math.sin(state.angle) * state.speed;
+      resolveTrackCollision();
+      updateRemoteKarts(dt);
+      
+      kartGroup.position.set(state.posX, state.posY, state.posZ);
+      kartGroup.rotation.y += dt * 20; // Girar a lo loco
+      return;
+    }
 
     const forward  = (keys['KeyW'] || keys['ArrowUp']);
     const backward = (keys['KeyS'] || keys['ArrowDown']);
@@ -879,9 +1005,18 @@
       if (hudPowerFx) hudPowerFx.classList.add('hidden');
     }
 
-    if (powerKey && state.powerCooldown <= 0 && state.powerTimer <= 0) {
-      state.powerTimer = 3.0;
-      state.powerCooldown = 10.0;
+    // ── Uso de Inventario (Powerups) ──
+    if (powerKey && state.heldItem && state.powerCooldown <= 0) {
+      if (state.heldItem === 'boost') {
+        state.powerTimer = 3.0;
+      } else if (state.heldItem === 'missile') {
+        spawnMissile('missile');
+      } else if (state.heldItem === 'homing') {
+        spawnMissile('homing');
+      }
+      state.heldItem = null;
+      state.powerCooldown = 0.5;
+      if (hudItemFx) hudItemFx.classList.add('hidden');
     }
 
     // ── Aceleración ──
@@ -906,47 +1041,42 @@
       state.steerAngle *= 0.8;
     }
 
-    // ── Derrape (Drift) ──
-    // Condición: salto en el aire + girando => inicia / mantiene drift
-    const driftCondition = jumpKey && turning && !state.isGrounded;
+    // ── Salto ──
+    if (state.jumpCooldown > 0) state.jumpCooldown -= dt;
+    if (jumpKey && state.isGrounded && state.jumpCooldown <= 0 && !state.isDrifting) {
+      state.velY = JUMP_VEL;
+      state.isGrounded = false;
+      state.jumpCooldown = 0.5;
+    }
 
-    if (driftCondition && !state.raceFinished) {
-      if (!state.isDrifting) state.isDrifting = true;
-      // Acumular potencia de drift (0..1) cuanto más tiempo se mantiene
-      state.driftPower = Math.min(state.driftPower + dt * 0.7, 1.0);
-
-      // Fricción lateral reducida: permite deslizamiento
-      // Amplificamos la rotación para un giro más dramático
-      const driftSteer = steerAmt * 1.5;
-      if (left)  state.angle -= driftSteer * 0.5; // ya se aplicó steerAmt arriba, añadir extra
-      if (right) state.angle += driftSteer * 0.5;
-
-      // Partículas de chispas en ruedas traseras
-      spawnDriftSparks(state.driftPower);
-    } else {
-      if (state.isDrifting) {
-        // Soltar el drift: mini-turbo proporcional al driftPower acumulado
-        state.driftBoostPending = state.driftPower;
-        state.isDrifting = false;
-        state.driftPower = 0;
-
-        // Aplicar mini-turbo inmediatamente
-        if (state.driftBoostPending > 0.25) {
-          const boostDuration = 0.5 + state.driftBoostPending * 1.5; // 0.5s-2s
-          state.powerTimer = Math.max(state.powerTimer, boostDuration);
-          state.driftBoostPending = 0;
-        } else {
-          state.driftBoostPending = 0;
-        }
+    // ── Derrape (Drift) Mario Kart Style ──
+    if (jumpKey && turning) {
+      if (state.isGrounded && !state.isDrifting && state.jumpCooldown > 0) {
+        // Acabamos de aterrizar (jumpCooldown > 0) y seguimos manteniendo Espacio + Giro
+        state.isDrifting = true;
       }
     }
 
-    // ── Salto ──
-    if (state.jumpCooldown > 0) state.jumpCooldown -= dt;
-    if (jumpKey && state.isGrounded && state.jumpCooldown <= 0) {
-      state.velY = JUMP_VEL; // salto corto
-      state.isGrounded = false;
-      state.jumpCooldown = 0.5;
+    if (!jumpKey) {
+      if (state.isDrifting) {
+        // Soltar el drift: mini-turbo
+        state.driftBoostPending = state.driftPower;
+        state.isDrifting = false;
+        state.driftPower = 0;
+        if (state.driftBoostPending > 0.25) {
+          const boostDuration = 0.5 + state.driftBoostPending * 1.5;
+          state.powerTimer = Math.max(state.powerTimer, boostDuration);
+        }
+        state.driftBoostPending = 0;
+      }
+    }
+
+    if (state.isDrifting) {
+      state.driftPower = Math.min(state.driftPower + dt * 0.7, 1.0);
+      const driftSteer = steerAmt * 1.5;
+      if (left)  state.angle -= driftSteer * 0.5;
+      if (right) state.angle += driftSteer * 0.5;
+      spawnDriftSparks(state.driftPower);
     }
 
     // ── Gravedad ──
@@ -957,14 +1087,6 @@
         state.posY = GROUND_Y;
         state.velY = 0;
         state.isGrounded = true;
-        // Fin de drift si aterrizó
-        if (state.isDrifting) {
-          state.isDrifting = false;
-          if (state.driftPower > 0.25) {
-            state.powerTimer = Math.max(state.powerTimer, 0.5 + state.driftPower * 1.5);
-          }
-          state.driftPower = 0;
-        }
       }
     }
 
@@ -989,7 +1111,6 @@
     }
 
     // ── Ruedas ──
-    // CORRECCIÓN: restar en lugar de sumar para que giren hacia adelante al ir forward
     state.wheelRot -= state.speed * 2.6;
     wheelRig.forEach(w => {
       w.spin.rotation.x = state.wheelRot;
@@ -1123,6 +1244,34 @@
       state.lastLapTime = -1;
       resetCheckpoints();
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
+    },
+    lockAndReset(positionIndex = 0) {
+      state.isLocked = true;
+      state.speed = 0;
+      state.velY = 0;
+      state.spinOutTimer = 0;
+      
+      // Offset lateral basado en positionIndex
+      const lateralOffset = (positionIndex % 2 === 0 ? 1 : -1) * (2 + Math.floor(positionIndex/2) * 2);
+      const backwardOffset = Math.floor(positionIndex/2) * 3;
+      
+      const s = trackSamples[0];
+      const startAngle = Math.atan2(s.tan.z, s.tan.x);
+      
+      state.angle = startAngle;
+      state.posX = s.x + s.normal.x * lateralOffset - Math.cos(startAngle) * backwardOffset;
+      state.posZ = s.z + s.normal.z * lateralOffset - Math.sin(startAngle) * backwardOffset;
+      state.posY = 0;
+    },
+    unlock() {
+      state.isLocked = false;
+    },
+    spinOut() {
+      state.spinOutTimer = 1.5; // 1.5 segundos de trompo
+      state.speed = 0;
+      state.powerActive = false;
+      state.powerTimer = 0;
+      state.boost = 1;
     },
     trackHalfWidth: HALF_WIDTH,
     startPoint: { x: startSample.x, z: startSample.z, angle: startAngle0 }
