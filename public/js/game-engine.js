@@ -123,11 +123,13 @@
       color: 0x140912, roughness: 1, metalness: 0,
       emissive: 0x22040a, emissiveIntensity: 0.25
     });
-    for (let i = 0; i < 36; i++) {
-      const a = (i / 36) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
-      const r = 420 + Math.random() * 180;
-      const h = 32 + Math.random() * 56;
-      const rad = 20 + Math.random() * 28;
+    // El tráfico del circuito llega hasta ~190 * WORLD_SCALE = 342 unidades.
+    // Las montañas se colocan a partir de 500 unidades para no invadir la pista.
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2 + (Math.random() - 0.5) * 0.15;
+      const r = 500 + Math.random() * 250; // Fuera del área de la pista
+      const h = 32 + Math.random() * 60;
+      const rad = 22 + Math.random() * 30;
       const geo = new THREE.ConeGeometry(rad, h, 6);
       const m = new THREE.Mesh(geo, mountMat);
       m.position.set(Math.cos(a) * r, h / 2 - 3, Math.sin(a) * r);
@@ -765,7 +767,14 @@
     const target = checkpoints[state.nextCheckpoint];
     if (sampleIdxDelta(sampleIdx, target.idx) > CHECKPOINT_TOLERANCE) return;
 
-    const closingLap = state.nextCheckpoint === 0
+    const isFinishCheckpoint = state.nextCheckpoint === 0;
+    // Para la meta: el kart debe estar ya AL OTRO LADO de la línea (bestIdx cerca de 0),
+    // no antes (bestIdx cerca de TRACK_SAMPLES). Esto evita el cierre prematuro.
+    if (isFinishCheckpoint) {
+      // Sólo permitir el cierre si el índice actual es pequeño (kart pasó la línea)
+      if (sampleIdx > CHECKPOINT_TOLERANCE * 2) return;
+    }
+    const closingLap = isFinishCheckpoint
       && state.checkpointsPassed >= CHECKPOINT_COUNT - 1; // Exige haber pasado todos los anteriores
     state.nextCheckpoint = (state.nextCheckpoint + 1) % CHECKPOINT_COUNT;
 
@@ -859,9 +868,10 @@
     driftDir: 0,        // dirección fijada al iniciar el derrape: -1 izq, +1 der
     driftBoostPending: 0, // mini-turbo acumulado al soltar el drift
     wasJumpingAndTurning: false,
-    // Tiempo
+    // Tiempo — raceStartTime se actualiza al primer movimiento real
     raceStartTime: performance.now(),
     lapStartTime:  performance.now(),
+    raceTimerStarted: false, // El cronómetro no empieza hasta el primer aceleración
     lastLapTime: -1,
     bestLap: -1,
     raceFinished: false,
@@ -1548,10 +1558,20 @@
       hudProgressFill.style.width = progressPct + '%';
     }
 
-    // Cronómetro de carrera
+    // Cronómetro de carrera (solo avanza una vez que el jugador se mueve por primera vez)
     if (hudTimer && !state.raceFinished) {
-      const elapsed = performance.now() - state.raceStartTime;
-      hudTimer.textContent = formatTime(elapsed);
+      if (state.raceTimerStarted) {
+        const elapsed = performance.now() - state.raceStartTime;
+        hudTimer.textContent = formatTime(elapsed);
+      } else {
+        hudTimer.textContent = formatTime(0);
+        // Arrancar cuando el jugador empiece a moverse
+        if (!state.isLocked && Math.abs(state.speed) > 0.005) {
+          state.raceTimerStarted = true;
+          state.raceStartTime = performance.now();
+          state.lapStartTime  = performance.now();
+        }
+      }
     }
 
     // Sentido contrario
@@ -1617,6 +1637,7 @@
       state.missiles = [];
       state.spinOutTimer = 0;
       state.invulnerableTimer = 0;
+      state.raceTimerStarted = false;
       kartGroup.visible = true;
       updateMissileHUD();
       resetCheckpoints();
