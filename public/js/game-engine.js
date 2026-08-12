@@ -70,23 +70,35 @@
   /* ──────────────────────────────────────────
      Track path — circuito variado grande
   ────────────────────────────────────────── */
-  const WORLD_SCALE = 1.6;
-  const HALF_WIDTH = 11;
+  const WORLD_SCALE = 1.8;
+  const HALF_WIDTH = 14;
   const BARRIER_GAP = 1.5;
 
   const controlPoints = [
-    [ 100,   0], [ 100, -50],
-    [  70, -100], [  10, -110],
-    [ -50, -110], [-100, -80],
-    [-120, -30], [-120,  30],
-    [ -80,  90], [ -30, 100],
-    [  10,  80], [  50, 100],
-    [  90,  70], [ 100,  30]
+    [ 160,   0],
+    [ 160, -70],
+    [ 150, -140],
+    [ 110, -200],
+    [  50, -210],
+    [   0, -180],
+    [ -40, -130],
+    [ -90, -150],
+    [-140, -130],
+    [-180, -80],
+    [-190,   0],
+    [-160,  60],
+    [-100,  80],
+    [ -60,  40],
+    [ -20,  90],
+    [  30, 130],
+    [  90, 140],
+    [ 140, 110],
+    [ 160,  60]
   ].map(([x, z]) => new THREE.Vector3(x * WORLD_SCALE, 0, z * WORLD_SCALE));
 
   const trackCurve = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal', 0.5);
 
-  const TRACK_SAMPLES = 400;
+  const TRACK_SAMPLES = 600;
   const trackSamples = [];
   for (let i = 0; i <= TRACK_SAMPLES; i++) {
     const t = i / TRACK_SAMPLES;
@@ -111,11 +123,11 @@
       color: 0x140912, roughness: 1, metalness: 0,
       emissive: 0x22040a, emissiveIntensity: 0.25
     });
-    for (let i = 0; i < 28; i++) {
-      const a = (i / 28) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
-      const r = 260 + Math.random() * 120;
-      const h = 26 + Math.random() * 46;
-      const rad = 16 + Math.random() * 22;
+    for (let i = 0; i < 36; i++) {
+      const a = (i / 36) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
+      const r = 420 + Math.random() * 180;
+      const h = 32 + Math.random() * 56;
+      const rad = 20 + Math.random() * 28;
       const geo = new THREE.ConeGeometry(rad, h, 6);
       const m = new THREE.Mesh(geo, mountMat);
       m.position.set(Math.cos(a) * r, h / 2 - 3, Math.sin(a) * r);
@@ -125,39 +137,86 @@
     }
   }
 
+  function buildFlatRoadMesh() {
+    const geo = new THREE.BufferGeometry();
+    const pos = [];
+    const uvs = [];
+    const indices = [];
+
+    const numSamples = trackSamples.length;
+    for (let i = 0; i < numSamples; i++) {
+      const s = trackSamples[i];
+      const lx = s.x + s.normal.x * HALF_WIDTH;
+      const lz = s.z + s.normal.z * HALF_WIDTH;
+      const rx = s.x - s.normal.x * HALF_WIDTH;
+      const rz = s.z - s.normal.z * HALF_WIDTH;
+
+      pos.push(lx, 0.02, lz);
+      pos.push(rx, 0.02, rz);
+
+      const u = s.t * 20;
+      uvs.push(0, u);
+      uvs.push(1, u);
+
+      if (i < numSamples - 1) {
+        const v1 = i * 2;
+        const v2 = i * 2 + 1;
+        const v3 = (i + 1) * 2;
+        const v4 = (i + 1) * 2 + 1;
+
+        indices.push(v1, v3, v2);
+        indices.push(v2, v3, v4);
+      }
+    }
+
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x181824,
+      roughness: 0.75,
+      metalness: 0.25,
+      side: THREE.DoubleSide
+    });
+    return new THREE.Mesh(geo, mat);
+  }
+
   function buildTrack() {
     const group = new THREE.Group();
 
-    const groundGeo = new THREE.PlaneGeometry(700, 700, 48, 48);
+    const groundGeo = new THREE.PlaneGeometry(1200, 1200, 64, 64);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x0d0d1a, roughness: 0.9, metalness: 0.1 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     group.add(ground);
 
-    const gridHelper = new THREE.GridHelper(700, 70, 0x1a0000, 0x150000);
+    const gridHelper = new THREE.GridHelper(1200, 80, 0x1a0000, 0x150000);
     gridHelper.position.y = 0.01;
     group.add(gridHelper);
 
-    const trackGeo = new THREE.TubeGeometry(trackCurve, 500, HALF_WIDTH, 10, true);
-    const trackMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8, metalness: 0.3 });
-    const track = new THREE.Mesh(trackGeo, trackMat);
-    track.receiveShadow = true;
-    group.add(track);
+    // Carretera plana (sin túnel negro)
+    const trackMesh = buildFlatRoadMesh();
+    trackMesh.receiveShadow = true;
+    group.add(trackMesh);
 
-    const lineGeo = new THREE.TubeGeometry(trackCurve, 500, 0.15, 6, true);
-    const lineMat = new THREE.MeshStandardMaterial({ color: 0xa30000, emissive: 0xa30000, emissiveIntensity: 1.2 });
+    // Línea central roja
+    const lineGeo = new THREE.TubeGeometry(trackCurve, 600, 0.2, 6, true);
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0xa30000, emissive: 0xa30000, emissiveIntensity: 1.4 });
     const centerLine = new THREE.Mesh(lineGeo, lineMat);
-    centerLine.position.y = 0.05;
+    centerLine.position.y = 0.06;
     group.add(centerLine);
 
+    // Barreras laterales neón
     const barrierMat = new THREE.MeshStandardMaterial({
       color: 0x222222, roughness: 0.6, metalness: 0.5,
-      emissive: 0xa30000, emissiveIntensity: 0.1
+      emissive: 0xa30000, emissiveIntensity: 0.3
     });
     function addBarrier(dist) {
       const c = offsetCurve(dist);
-      const g = new THREE.TubeGeometry(c, 500, 0.35, 6, true);
+      const g = new THREE.TubeGeometry(c, 600, 0.4, 6, true);
       const m = new THREE.Mesh(g, barrierMat);
       m.castShadow = true;
       group.add(m);
@@ -168,24 +227,24 @@
     // Línea de meta
     const startSampleLocal = trackSamples[0];
     const startAngleLocal = Math.atan2(startSampleLocal.tan.z, startSampleLocal.tan.x);
-    const startGeo = new THREE.BoxGeometry(0.8, 0.05, HALF_WIDTH * 2);
+    const startGeo = new THREE.BoxGeometry(1.0, 0.05, HALF_WIDTH * 2);
     const startMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
     const startLine = new THREE.Mesh(startGeo, startMat);
-    startLine.position.set(startSampleLocal.x, 0.06, startSampleLocal.z);
+    startLine.position.set(startSampleLocal.x, 0.07, startSampleLocal.z);
     startLine.rotation.y = -startAngleLocal;
     group.add(startLine);
 
-    // Pilares
-    const pillarGeo = new THREE.CylinderGeometry(0.4, 0.4, 6, 8);
+    // Pilares neón
+    const pillarGeo = new THREE.CylinderGeometry(0.45, 0.45, 7, 8);
     const pillarMat = new THREE.MeshStandardMaterial({
-      color: 0x111111, emissive: 0xa30000, emissiveIntensity: 0.3, metalness: 0.8
+      color: 0x111111, emissive: 0xa30000, emissiveIntensity: 0.4, metalness: 0.8
     });
-    for (let i = 0; i < 48; i++) {
-      const s = trackSamples[Math.floor((i / 48) * TRACK_SAMPLES)];
+    for (let i = 0; i < 60; i++) {
+      const s = trackSamples[Math.floor((i / 60) * TRACK_SAMPLES)];
       const side = i % 2 === 0 ? 1 : -1;
-      const dist = HALF_WIDTH + 9;
+      const dist = HALF_WIDTH + 11;
       const pillar = new THREE.Mesh(pillarGeo, pillarMat);
-      pillar.position.set(s.x + s.normal.x * dist * side, 3, s.z + s.normal.z * dist * side);
+      pillar.position.set(s.x + s.normal.x * dist * side, 3.5, s.z + s.normal.z * dist * side);
       pillar.castShadow = true;
       group.add(pillar);
     }
@@ -196,35 +255,162 @@
   buildTrack();
 
   /* ──────────────────────────────────────────
-     Power-ups
+     Obstáculos variados y aleatorizados en la pista
   ────────────────────────────────────────── */
-  const POWERUP_COUNT = 18;
+  const OBSTACLE_COUNT = 26;
+  const obstacles = [];
+
+  function buildObstacles() {
+    // Geometrías para 3 tipos distintos de obstáculos
+    const barrelBaseGeo = new THREE.CylinderGeometry(0.8, 1.1, 1.3, 8);
+    const spikeGeo      = new THREE.OctahedronGeometry(0.65, 0);
+
+    const crystalBaseGeo = new THREE.ConeGeometry(1.0, 0.6, 6);
+    const crystalGeo     = new THREE.OctahedronGeometry(0.8, 0);
+
+    const eggBaseGeo = new THREE.SphereGeometry(0.9, 8, 8);
+    eggBaseGeo.scale(1, 0.6, 1);
+    const eggCoreGeo = new THREE.IcosahedronGeometry(0.5, 0);
+
+    // Materiales neón
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x111122, roughness: 0.5, metalness: 0.8 });
+    const matPink = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0033, emissiveIntensity: 1.8, roughness: 0.2 });
+    const matCyan = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00b4d8, emissiveIntensity: 1.9, roughness: 0.2 });
+    const matPurple = new THREE.MeshStandardMaterial({ color: 0x9900ff, emissive: 0x7700cc, emissiveIntensity: 2.0, roughness: 0.2 });
+
+    let currentIdx = 25;
+    for (let i = 0; i < OBSTACLE_COUNT; i++) {
+      // Separación aleatorizada entre obstáculos
+      currentIdx += Math.floor(16 + Math.random() * 22);
+      if (currentIdx >= TRACK_SAMPLES - 35) break;
+
+      const s = trackSamples[currentIdx];
+      // Desplazamiento lateral completamente aleatorizado en el ancho de la pista
+      const side = (Math.random() < 0.5 ? 1 : -1);
+      const laneFrac = 0.15 + Math.random() * 0.65;
+      const lateral = side * (HALF_WIDTH * laneFrac);
+      const ox = s.x + s.normal.x * lateral;
+      const oz = s.z + s.normal.z * lateral;
+
+      const type = i % 3; // 0: Barril, 1: Cristal Neón, 2: Mina Araña
+      const group = new THREE.Group();
+      let spikeMesh = null;
+      let lightColor = 0xff0055;
+
+      if (type === 0) {
+        // Tipo 1: Barril de Picos
+        const base = new THREE.Mesh(barrelBaseGeo, darkMat);
+        base.position.y = 0.65;
+        base.castShadow = true;
+        spikeMesh = new THREE.Mesh(spikeGeo, matPink);
+        spikeMesh.position.y = 1.5;
+        spikeMesh.castShadow = true;
+        group.add(base, spikeMesh);
+        lightColor = 0xff0055;
+      } else if (type === 1) {
+        // Tipo 2: Cristal de Láser Neón
+        const base = new THREE.Mesh(crystalBaseGeo, darkMat);
+        base.position.y = 0.3;
+        base.castShadow = true;
+        spikeMesh = new THREE.Mesh(crystalGeo, matCyan);
+        spikeMesh.position.y = 1.3;
+        spikeMesh.scale.set(0.9, 1.4, 0.9);
+        spikeMesh.castShadow = true;
+        group.add(base, spikeMesh);
+        lightColor = 0x00e5ff;
+      } else {
+        // Tipo 3: Huevo de Araña / Mina
+        const base = new THREE.Mesh(eggBaseGeo, darkMat);
+        base.position.y = 0.45;
+        base.castShadow = true;
+        spikeMesh = new THREE.Mesh(eggCoreGeo, matPurple);
+        spikeMesh.position.y = 1.1;
+        spikeMesh.castShadow = true;
+        group.add(base, spikeMesh);
+        lightColor = 0x9900ff;
+      }
+
+      // Variación aleatoria de escala y rotación
+      const randScale = 0.85 + Math.random() * 0.35;
+      group.scale.setScalar(randScale);
+      group.rotation.y = Math.random() * Math.PI * 2;
+      group.position.set(ox, 0, oz);
+      scene.add(group);
+
+      const light = new THREE.PointLight(lightColor, 1.5, 6);
+      light.position.set(ox, 1.5, oz);
+      scene.add(light);
+
+      obstacles.push({
+        mesh: group,
+        spike: spikeMesh,
+        x: ox,
+        z: oz,
+        radius: 1.7 * randScale,
+        color: lightColor
+      });
+    }
+  }
+  buildObstacles();
+
+  /* ──────────────────────────────────────────
+     Power-ups (Verde: Misil, Rojo: Teledirigido, Amarillo: Turbo)
+  ────────────────────────────────────────── */
+  const POWERUP_COUNT = 24;
   const POWERUP_RESPAWN = 6.0;
-  const POWERUP_PICKUP_RADIUS = 2.4;
+  const POWERUP_PICKUP_RADIUS = 2.5;
   const powerups = [];
 
   function buildPowerups() {
     const boxGeo = new THREE.OctahedronGeometry(0.75, 0);
-    const boxMat = new THREE.MeshStandardMaterial({
-      color: 0xffcc00, emissive: 0xff9500, emissiveIntensity: 1.4,
-      roughness: 0.25, metalness: 0.6
-    });
     const ringGeo = new THREE.TorusGeometry(1.1, 0.06, 8, 20);
-    const ringMat = new THREE.MeshStandardMaterial({
-      color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 1.5,
-      transparent: true, opacity: 0.6
-    });
+
+    const materials = {
+      missile: { // Verde
+        gem: new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00cc44, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.6 }),
+        ring: new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 1.5, transparent: true, opacity: 0.6 })
+      },
+      homing: { // Rojo
+        gem: new THREE.MeshStandardMaterial({ color: 0xff2244, emissive: 0xcc0022, emissiveIntensity: 1.5, roughness: 0.25, metalness: 0.6 }),
+        ring: new THREE.MeshStandardMaterial({ color: 0xff2244, emissive: 0xff2244, emissiveIntensity: 1.5, transparent: true, opacity: 0.6 })
+      },
+      boost: { // Amarillo
+        gem: new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xff9500, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.6 }),
+        ring: new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 1.5, transparent: true, opacity: 0.6 })
+      }
+    };
+
+    const types = ['missile', 'homing', 'boost'];
 
     for (let i = 0; i < POWERUP_COUNT; i++) {
-      const s = trackSamples[Math.floor((i / POWERUP_COUNT) * TRACK_SAMPLES)];
-      const lane = [0, 1, -1, 0.5, -0.5][i % 5];
-      const lateral = lane * (HALF_WIDTH - 2);
-      const px = s.x + s.normal.x * lateral;
-      const pz = s.z + s.normal.z * lateral;
+      // Offset longitudinal respecto a los obstáculos para evitar coincidencias
+      const frac = ((i + 0.18) / POWERUP_COUNT) % 1;
+      const s = trackSamples[Math.floor(frac * TRACK_SAMPLES)];
+      const lane = [0, 0.65, -0.65, 0.35, -0.35][i % 5];
+      let lateral = lane * (HALF_WIDTH - 3.5);
+
+      let px = s.x + s.normal.x * lateral;
+      let pz = s.z + s.normal.z * lateral;
+
+      // Garantizar separación estricta con obstáculos (mínimo 10 unidades)
+      for (const obs of obstacles) {
+        const dx = px - obs.x;
+        const dz = pz - obs.z;
+        if (dx * dx + dz * dz < 100) {
+          lateral = -lateral;
+          if (Math.abs(lateral) < 2) lateral = (HALF_WIDTH - 4.5);
+          px = s.x + s.normal.x * lateral;
+          pz = s.z + s.normal.z * lateral;
+          break;
+        }
+      }
+
+      const type = types[i % 3];
+      const mats = materials[type];
 
       const group = new THREE.Group();
-      const gem = new THREE.Mesh(boxGeo, boxMat);
-      const ring = new THREE.Mesh(ringGeo, ringMat);
+      const gem = new THREE.Mesh(boxGeo, mats.gem);
+      const ring = new THREE.Mesh(ringGeo, mats.ring);
       ring.rotation.x = Math.PI / 2;
       group.add(gem, ring);
       group.position.set(px, 1.3, pz);
@@ -233,6 +419,7 @@
       powerups.push({
         mesh: group,
         basePos: new THREE.Vector3(px, 1.3, pz),
+        type,
         active: true,
         respawnTimer: 0
       });
@@ -553,7 +740,7 @@
   /* ──────────────────────────────────────────
      Checkpoints
   ────────────────────────────────────────── */
-  const CHECKPOINT_COUNT = 10;
+  const CHECKPOINT_COUNT = 15;
   const checkpoints = [];
   for (let i = 0; i < CHECKPOINT_COUNT; i++) {
     const idx = Math.floor((i / CHECKPOINT_COUNT) * TRACK_SAMPLES);
@@ -578,7 +765,8 @@
     const target = checkpoints[state.nextCheckpoint];
     if (sampleIdxDelta(sampleIdx, target.idx) > CHECKPOINT_TOLERANCE) return;
 
-    const closingLap = state.nextCheckpoint === 0;
+    const closingLap = state.nextCheckpoint === 0
+      && state.checkpointsPassed >= CHECKPOINT_COUNT - 1; // Exige haber pasado todos los anteriores
     state.nextCheckpoint = (state.nextCheckpoint + 1) % CHECKPOINT_COUNT;
 
     if (closingLap) {
@@ -595,10 +783,16 @@
       state.lap += 1;
       state.checkpointsPassed = 0;
 
-      // Actualizar HUD vuelta
-      if (hudLap) hudLap.textContent = `VUELTA ${Math.min(state.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`;
+      // Actualizar HUD vuelta — mostrar vuelta ACTUAL (recien completada +1)
+      const displayLap = Math.min(state.lap + 1, TOTAL_LAPS);
+      if (hudLap) hudLap.textContent = `VUELTA ${displayLap} / ${TOTAL_LAPS}`;
       if (hudLapTime) hudLapTime.textContent = 'VUELTA: ' + formatTime(lapTime);
       if (hudBestLap && state.bestLap >= 0) hudBestLap.textContent = 'MEJOR: ' + formatTime(state.bestLap);
+
+      // Mostrar cartel de vuelta (no en la vuelta 1 inicial)
+      if (state.lap >= 1 && !state.raceFinished) {
+        showLapAnnounce(state.lap + 1, TOTAL_LAPS);
+      }
 
       // Chequear fin de carrera
       if (state.lap >= TOTAL_LAPS && !state.raceFinished) {
@@ -662,6 +856,7 @@
     // Drift
     isDrifting: false,
     driftPower: 0,      // 0..1 — crece mientras dura el derrape
+    driftDir: 0,        // dirección fijada al iniciar el derrape: -1 izq, +1 der
     driftBoostPending: 0, // mini-turbo acumulado al soltar el drift
     wasJumpingAndTurning: false,
     // Tiempo
@@ -674,7 +869,8 @@
     isLocked: true,
     missiles: [], // Almacén de hasta 3 misiles
     missileCooldown: 0,
-    spinOutTimer: 0
+    spinOutTimer: 0,
+    invulnerableTimer: 0
   };
 
   const activeMissiles = [];
@@ -710,6 +906,32 @@
   const minimapCtx     = minimapCanvas ? minimapCanvas.getContext('2d') : null;
   const hudCountdown    = document.getElementById('hud-countdown');
   const hudCountdownNum = document.getElementById('hud-countdown-num');
+  const hudLapAnnounce  = document.getElementById('hud-lap-announce');
+  const lapAnnounceNum  = document.getElementById('lap-announce-num');
+  const lapAnnounceLabel= document.getElementById('lap-announce-label');
+  let lapAnnounceTimer  = null;
+
+  function showLapAnnounce(lap, totalLaps) {
+    if (!hudLapAnnounce) return;
+    const isLast = lap > totalLaps;
+    // Re-leer nodos frescos del DOM (pueden haber sido reemplazados en llamadas anteriores)
+    const numEl = document.getElementById('lap-announce-num');
+    const lblEl = document.getElementById('lap-announce-label');
+    if (!numEl || !lblEl) return;
+    lblEl.textContent = isLast ? '¡ÚLTIMA' : 'VUELTA';
+    numEl.textContent = isLast ? 'VUELTA!' : String(lap);
+    numEl.classList.toggle('last-lap', isLast);
+    hudLapAnnounce.classList.remove('hidden');
+    // Reiniciar animación CSS clonando el nodo (fuerza reflow)
+    const numClone = numEl.cloneNode(true);
+    numEl.replaceWith(numClone);
+    const lblClone = lblEl.cloneNode(true);
+    lblEl.replaceWith(lblClone);
+    if (lapAnnounceTimer) clearTimeout(lapAnnounceTimer);
+    lapAnnounceTimer = setTimeout(() => {
+      hudLapAnnounce.classList.add('hidden');
+    }, 2500);
+  }
   const missileSlots = [
     document.getElementById('missile-slot-0'),
     document.getElementById('missile-slot-1'),
@@ -727,6 +949,9 @@
       } else if (item === 'homing') {
         slot.className = 'sk-missile-slot active-homing';
         slot.innerHTML = '<i class="fa-solid fa-bullseye"></i>';
+      } else if (item === 'boost') {
+        slot.className = 'sk-missile-slot active-boost';
+        slot.innerHTML = '<i class="fa-solid fa-bolt"></i>';
       } else {
         slot.className = 'sk-missile-slot';
         slot.innerHTML = '<i class="fa-solid fa-crosshair"></i>';
@@ -829,6 +1054,15 @@
     minimapCtx.lineWidth = 2;
     minimapCtx.stroke();
 
+    // Obstáculos en minimapa con sus respectivos colores neón
+    for (const obs of obstacles) {
+      const { mx: ox, my: oz } = worldToMinimap(obs.x, obs.z);
+      minimapCtx.fillStyle = obs.color ? '#' + obs.color.toString(16).padStart(6, '0') : '#ff0055';
+      minimapCtx.beginPath();
+      minimapCtx.arc(ox, oz, 2.5, 0, Math.PI * 2);
+      minimapCtx.fill();
+    }
+
     // Punto del jugador
     const { mx: px, my: pz } = worldToMinimap(state.posX, state.posZ);
     // Sombra/glow
@@ -918,13 +1152,14 @@
           spawnPickupBurst(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z);
           
           if (state.missiles.length < 3) {
-            const newItem = Math.random() < 0.5 ? 'missile' : 'homing';
+            const newItem = p.type || 'missile';
             state.missiles.push(newItem);
             updateMissileHUD();
 
             if (hudItemFx) {
               hudItemFx.classList.remove('hidden');
-              hudItemFx.textContent = newItem === 'homing' ? 'MISIL TELEDIRIGIDO' : 'MISIL PUNTERÍA';
+              hudItemFx.textContent = newItem === 'homing' ? 'MISIL TELEDIRIGIDO' : (newItem === 'boost' ? 'TURBO VELOCIDAD' : 'MISIL PUNTERÍA');
+              hudItemFx.style.color = newItem === 'homing' ? '#ff2244' : (newItem === 'boost' ? '#ffcc00' : '#00ff66');
               void hudItemFx.offsetWidth;
               hudItemFx.style.animation = 'none';
               requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
@@ -1061,6 +1296,26 @@
     
     updateMissiles(dt);
 
+    if (state.invulnerableTimer > 0) {
+      state.invulnerableTimer -= dt;
+    }
+
+    // ── Colisión con Obstáculos ──
+    for (const obs of obstacles) {
+      if (obs.spike) obs.spike.rotation.y += dt * 2.0;
+      const dx = state.posX - obs.x;
+      const dz = state.posZ - obs.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < obs.radius * obs.radius) {
+        if (state.spinOutTimer <= 0 && state.invulnerableTimer <= 0) {
+          state.spinOutTimer = 1.5; // Gira durante 1.5 segundos
+          state.invulnerableTimer = 3.0; // 1.5s giro + 1.5s cooldown de inmunidad
+          state.speed *= 0.2;
+          spawnPickupBurst(obs.x, 1.0, obs.z);
+        }
+      }
+    }
+
     // ── Bloqueo de largada ──
     if (state.isLocked) {
       updateRemoteKarts(dt);
@@ -1077,8 +1332,16 @@
       updateRemoteKarts(dt);
       
       kartGroup.position.set(state.posX, state.posY, state.posZ);
-      kartGroup.rotation.y += dt * 20; // Girar a lo loco
+      kartGroup.rotation.y += dt * 20; // Girar durante 1.5s
+      kartGroup.visible = true;
       return;
+    }
+
+    // Parpadeo visual durante el cooldown de inmunidad (2.4 segundos post-trompo)
+    if (state.invulnerableTimer > 0) {
+      kartGroup.visible = Math.floor(performance.now() / 90) % 2 === 0;
+    } else {
+      kartGroup.visible = true;
     }
 
     const forward    = (keys['KeyW'] || keys['ArrowUp']);
@@ -1110,11 +1373,16 @@
       if (hudPowerFx) hudPowerFx.classList.add('hidden');
     }
 
-    // ── Disparo de Misiles (Tecla E) ──
+    // ── Disparo de Misiles / Usar Ítem (Tecla E) ──
     if (state.missileCooldown > 0) state.missileCooldown -= dt;
     if (missileKey && state.missiles.length > 0 && state.missileCooldown <= 0) {
       const launched = state.missiles.shift();
-      spawnMissile(launched);
+      if (launched === 'boost') {
+        state.powerTimer = 3.0;
+        state.boost = BOOST_MULT;
+      } else {
+        spawnMissile(launched);
+      }
       updateMissileHUD();
       state.missileCooldown = 0.3;
     }
@@ -1131,6 +1399,7 @@
 
     // ── Steering ──
     const steerAmt = Math.abs(state.speed) > 0.01 ? STEER * (state.speed > 0 ? 1 : -1) : 0;
+
     if (left) {
       state.angle -= steerAmt;
       state.steerAngle = Math.max(state.steerAngle - 0.05, -0.4);
@@ -1150,10 +1419,11 @@
     }
 
     // ── Derrape (Drift) Mario Kart Style ──
+    // Al saltar y girar, se fija la dirección del derrape
     if (jumpKey && turning) {
       if (state.isGrounded && !state.isDrifting && state.jumpCooldown > 0) {
-        // Acabamos de aterrizar (jumpCooldown > 0) y seguimos manteniendo Espacio + Giro
         state.isDrifting = true;
+        state.driftDir = right ? 1 : -1; // Fijar dirección al iniciar
       }
     }
 
@@ -1163,6 +1433,7 @@
         state.driftBoostPending = state.driftPower;
         state.isDrifting = false;
         state.driftPower = 0;
+        state.driftDir = 0;
         if (state.driftBoostPending > 0.25) {
           const boostDuration = 0.5 + state.driftBoostPending * 1.5;
           state.powerTimer = Math.max(state.powerTimer, boostDuration);
@@ -1173,9 +1444,10 @@
 
     if (state.isDrifting) {
       state.driftPower = Math.min(state.driftPower + dt * 0.7, 1.0);
-      const driftSteer = steerAmt * 1.5;
-      if (left)  state.angle -= driftSteer * 0.5;
-      if (right) state.angle += driftSteer * 0.5;
+      // Curvatura del derrape: escalada por dt para no depender del framerate
+      // Reducida a 0.45 rad/s para que sea controlable pero notoria
+      const driftSteer = STEER * 0.45 * dt * 60;
+      state.angle += driftSteer * state.driftDir;
       spawnDriftSparks(state.driftPower);
     }
 
@@ -1214,7 +1486,7 @@
     state.wheelRot -= state.speed * 2.6;
     wheelRig.forEach(w => {
       w.spin.rotation.x = state.wheelRot;
-      if (w.steer) w.steer.rotation.y = state.steerAngle * (MAX_STEER_VISUAL / 0.4);
+      if (w.steer) w.steer.rotation.y = -state.steerAngle * (MAX_STEER_VISUAL / 0.4);
     });
 
     // ── Partículas de escape ──
@@ -1343,6 +1615,9 @@
       state.bestLap = -1;
       state.lastLapTime = -1;
       state.missiles = [];
+      state.spinOutTimer = 0;
+      state.invulnerableTimer = 0;
+      kartGroup.visible = true;
       updateMissileHUD();
       resetCheckpoints();
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
@@ -1370,6 +1645,8 @@
       state.speed = 0;
       state.velY = 0;
       state.spinOutTimer = 0;
+      state.invulnerableTimer = 0;
+      kartGroup.visible = true;
       state.missiles = [];
       updateMissileHUD();
       
@@ -1389,11 +1666,14 @@
       state.isLocked = false;
     },
     spinOut() {
-      state.spinOutTimer = 1.5; // 1.5 segundos de trompo
-      state.speed = 0;
-      state.powerActive = false;
-      state.powerTimer = 0;
-      state.boost = 1;
+      if (state.spinOutTimer <= 0 && state.invulnerableTimer <= 0) {
+        state.spinOutTimer = 1.5; // 1.5 segundos de trompo
+        state.invulnerableTimer = 3.0; // 1.5s trompo + 1.5s cooldown
+        state.speed = 0;
+        state.powerActive = false;
+        state.powerTimer = 0;
+        state.boost = 1;
+      }
     },
     trackHalfWidth: HALF_WIDTH,
     startPoint: { x: startSample.x, z: startSample.z, angle: startAngle0 }
