@@ -368,7 +368,7 @@ wss.on('connection', (ws) => {
                         type: 'hit',
                         targetId: data.targetId,
                         sourceId: playerGlobal.id
-                    }, ws);
+                    }, null);
                     break;
                 }
                 

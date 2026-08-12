@@ -168,60 +168,66 @@
     const style = document.createElement('style');
     style.textContent = `
       #sk-mp-panel {
-        position:absolute; top:12px; left:24px;
-        width:200px; pointer-events:auto;
-        font-family:'Share Tech Mono',monospace; font-size:0.7rem;
-        background:rgba(10,10,18,0.72);
-        border:1px solid rgba(163,0,0,0.4);
-        border-radius:4px; padding:10px 12px;
-        color:#eee; z-index:5;
+        position:absolute; top:60px; left:20px;
+        width:250px; pointer-events:auto;
+        font-family:'Share Tech Mono',monospace; font-size:0.72rem;
+        background:rgba(10,10,18,0.88);
+        border:1px solid rgba(163,0,0,0.5);
+        border-radius:6px; padding:12px 14px;
+        color:#eee; z-index:15;
+        box-shadow:0 8px 32px rgba(0,0,0,0.6);
+        backdrop-filter:blur(8px);
       }
-      .sk-mp-status { letter-spacing:0.08em; color:#a30000; margin-bottom:8px; font-weight:700; }
+      .sk-mp-status { letter-spacing:0.08em; color:#ff3333; margin-bottom:8px; font-weight:700; display:flex; align-items:center; gap:6px; }
       .sk-mp-status.sk-mp-ok { color:#39d17d; }
       .sk-mp-debug {
         font-size:0.58rem; letter-spacing:0.06em; color:#ffcc00;
         background:rgba(255,204,0,0.12); border:1px solid rgba(255,204,0,0.35);
-        padding:3px 6px; border-radius:2px; margin-bottom:8px;
+        padding:4px 8px; border-radius:3px; margin-bottom:8px;
       }
       .sk-mp-section.hidden { display:none; }
       .sk-mp-pilot {
-        font-size:0.65rem; color:rgba(255,255,255,0.6);
-        margin-bottom:6px; letter-spacing:0.05em;
+        font-size:0.68rem; color:#00d4ff;
+        margin-bottom:8px; letter-spacing:0.06em; font-weight:700;
+        border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:4px;
       }
       .sk-mp-row { display:flex; gap:6px; margin-bottom:6px; }
       .sk-mp-input {
-        width:50%; background:rgba(255,255,255,0.06);
-        border:1px solid rgba(255,255,255,0.15); color:#fff;
-        font-family:inherit; font-size:0.68rem; padding:4px 6px; border-radius:2px;
+        width:50%; background:rgba(255,255,255,0.08);
+        border:1px solid rgba(255,255,255,0.2); color:#fff;
+        font-family:inherit; font-size:0.7rem; padding:6px 8px; border-radius:3px;
+        outline:none; transition:border-color 0.2s;
       }
+      .sk-mp-input:focus { border-color:rgba(163,0,0,0.8); }
       .sk-mp-input-wide { width:100%; }
       .sk-mp-btn {
-        flex:1; background:rgba(163,0,0,0.25); border:1px solid rgba(163,0,0,0.5);
-        color:#fff; font-family:inherit; font-size:0.65rem; letter-spacing:0.08em;
-        padding:5px 0; border-radius:2px; cursor:pointer;
+        flex:1; background:rgba(163,0,0,0.4); border:1px solid rgba(163,0,0,0.7);
+        color:#fff; font-family:inherit; font-size:0.68rem; letter-spacing:0.08em;
+        padding:6px 0; border-radius:3px; cursor:pointer; font-weight:700;
+        transition:all 0.2s;
       }
-      .sk-mp-btn:hover { background:rgba(163,0,0,0.45); }
+      .sk-mp-btn:hover { background:rgba(196,0,0,0.7); box-shadow:0 0 10px rgba(163,0,0,0.5); }
       .sk-mp-btn.hidden { display:none; }
       .sk-mp-btn-ghost {
-        background:transparent; border:1px solid rgba(255,255,255,0.15);
-        color:rgba(255,255,255,0.5); margin-top:2px; font-size:0.58rem;
+        background:transparent; border:1px solid rgba(255,255,255,0.2);
+        color:rgba(255,255,255,0.6); margin-top:4px; font-size:0.6rem;
       }
-      .sk-mp-btn-ghost:hover { background:rgba(255,255,255,0.06); }
+      .sk-mp-btn-ghost:hover { background:rgba(255,255,255,0.1); color:#fff; }
       .sk-mp-race-status {
         margin-top:8px; padding:6px 8px;
-        background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1);
-        border-radius:2px; font-size:0.62rem; letter-spacing:0.04em;
+        background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12);
+        border-radius:3px; font-size:0.62rem; letter-spacing:0.04em;
         color:#fff;
       }
       .sk-mp-race-status.hidden { display:none; }
       .sk-mp-players { list-style:none; margin:6px 0 0; padding:0; max-height:110px; overflow-y:auto; }
       .sk-mp-players li {
-        padding:2px 0; color:rgba(255,255,255,0.75);
+        padding:4px 0; color:rgba(255,255,255,0.85);
         border-top:1px solid rgba(255,255,255,0.06);
-        display:flex; justify-content:space-between;
+        display:flex; justify-content:space-between; font-size:0.68rem;
       }
-      .sk-mp-players li .sk-mp-ready { color:#39d17d; font-size:0.6rem; }
-      .sk-mp-players li .sk-mp-notready { color:rgba(255,255,255,0.3); font-size:0.6rem; }
+      .sk-mp-players li .sk-mp-ready { color:#39d17d; font-size:0.62rem; font-weight:700; }
+      .sk-mp-players li .sk-mp-notready { color:rgba(255,255,255,0.3); font-size:0.62rem; }
     `;
     document.head.appendChild(style);
   }
@@ -517,10 +523,14 @@
       case 'countdown':
         race.phase = 'countdown';
         setRaceStatus('¡LARGADA EN ' + msg.seconds + '…!');
-        if (msg.seconds === 5 && window.SpiderKart) {
-          // Bloquear a los jugadores y moverlos a la salida con offset basado en su posición
-          const myPos = Object.keys(players).indexOf(playerId);
-          window.SpiderKart.lockAndReset(myPos);
+        if (window.SpiderKart) {
+          if (msg.seconds === 5) {
+            const myPos = Object.keys(players).indexOf(playerId);
+            window.SpiderKart.lockAndReset(myPos);
+          }
+          if (window.SpiderKart.setCountdown) {
+            window.SpiderKart.setCountdown(msg.seconds);
+          }
         }
         break;
 
@@ -530,8 +540,11 @@
         race.startedAt = performance.now();
         race.finished = false;
         if (window.SpiderKart) {
-          window.SpiderKart.resetRace();
-          window.SpiderKart.unlock();
+          if (window.SpiderKart.setCountdown) window.SpiderKart.setCountdown(0);
+          else {
+            window.SpiderKart.resetRace();
+            window.SpiderKart.unlock();
+          }
         }
         setRaceStatus('¡EN CARRERA! ' + race.laps + ' vueltas.');
         break;
@@ -549,10 +562,12 @@
         break;
 
       case 'hit':
-        if (msg.targetId === playerId && window.SpiderKart) {
-          window.SpiderKart.spinOut();
-        } else if (window.SpiderKart && msg.targetId !== playerId) {
-          // Opcionalmente podemos hacer animar un trompo en el fantasma remoto
+        if (window.SpiderKart) {
+          if (window.SpiderKart.triggerRemoteHit) {
+            window.SpiderKart.triggerRemoteHit(msg.targetId === playerId ? 'local' : msg.targetId);
+          } else if (msg.targetId === playerId) {
+            window.SpiderKart.spinOut();
+          }
         }
         break;
 

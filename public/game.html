@@ -142,6 +142,71 @@
       color: rgba(255,255,255,0.2);
     }
 
+    /* Missile inventory HUD (3 slots) */
+    .sk-hud-missiles {
+      position: absolute; bottom: 70px; right: 24px;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    }
+    .sk-hud-missiles-label {
+      font-size: 0.6rem; letter-spacing: 0.2em; color: #ff3333; font-weight: 700;
+      text-shadow: 0 0 8px rgba(255,51,51,0.5);
+    }
+    .sk-hud-missiles-slots {
+      display: flex; gap: 6px;
+    }
+    .sk-missile-slot {
+      width: 34px; height: 34px;
+      background: rgba(10,10,18,0.75);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.9rem; color: rgba(255,255,255,0.2);
+      transition: all 0.2s ease-in-out;
+    }
+    .sk-missile-slot.active-straight {
+      border-color: #00ff66;
+      color: #00ff66;
+      box-shadow: 0 0 12px rgba(0,255,102,0.6);
+      background: rgba(0,255,102,0.12);
+    }
+    .sk-missile-slot.active-homing {
+      border-color: #ff2244;
+      color: #ff2244;
+      box-shadow: 0 0 12px rgba(255,34,68,0.6);
+      background: rgba(255,34,68,0.12);
+      animation: missileSlotPulse 0.8s infinite alternate;
+    }
+    @keyframes missileSlotPulse {
+      from { transform: scale(1); }
+      to { transform: scale(1.08); }
+    }
+
+    /* Countdown overlay (5, 4, 3, 2, 1, GO) */
+    .sk-hud-countdown {
+      position: absolute; top: 40%; left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      pointer-events: none; z-index: 30;
+    }
+    .sk-hud-countdown.hidden { display: none; }
+    .countdown-num {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 8rem; font-weight: 900;
+      color: #ffcc00;
+      text-shadow: 0 0 40px rgba(255,204,0,0.9), 0 0 80px rgba(255,51,0,0.6);
+      animation: countdownPop 0.4s ease-out forwards;
+    }
+    .countdown-num.go {
+      color: #00ff66;
+      text-shadow: 0 0 50px rgba(0,255,102,0.9), 0 0 100px rgba(0,255,102,0.6);
+      font-size: 9rem;
+    }
+    @keyframes countdownPop {
+      0% { transform: scale(0.3); opacity: 0; }
+      50% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
     /* Boost FX */
     .sk-hud-power-fx {
       position: absolute; top: 48%; left: 50%;
@@ -303,23 +368,36 @@
       <canvas id="minimap-canvas" width="140" height="140"></canvas>
     </div>
 
+    <!-- MISSILES INVENTORY (Up to 3 missiles) -->
+    <div class="sk-hud-missiles" id="hud-missiles">
+      <div class="sk-hud-missiles-label">[ E ] MISILES</div>
+      <div class="sk-hud-missiles-slots">
+        <div class="sk-missile-slot" id="missile-slot-0"><i class="fa-solid fa-crosshair"></i></div>
+        <div class="sk-missile-slot" id="missile-slot-1"><i class="fa-solid fa-crosshair"></i></div>
+        <div class="sk-missile-slot" id="missile-slot-2"><i class="fa-solid fa-crosshair"></i></div>
+      </div>
+    </div>
+
     <!-- BOTTOM-RIGHT: Power bar -->
     <div class="sk-hud-power">
-      <span class="sk-hud-label">[ K ] POWER</span>
+      <span class="sk-hud-label">[ K ] TURBO</span>
       <div class="sk-hud-bar"><div class="sk-hud-fill" id="hud-power-fill"></div></div>
     </div>
 
     <!-- BOTTOM: Controles -->
     <div class="sk-hud-controls">
       <span>WASD / FLECHAS — MOVER</span>
-      <span>SPACE — SALTAR</span>
-      <span>SPACE + GIRO — DERRAPE</span>
-      <span>K — PODER</span>
+      <span>SPACE — DERRAPE</span>
+      <span>E — DISPARAR MISIL</span>
+      <span>K — TURBO</span>
     </div>
 
     <!-- FX Overlays -->
-    <div class="sk-hud-power-fx hidden" id="hud-power-fx">BOOST ACTIVO</div>
-    <div class="sk-hud-item-fx hidden" id="hud-item-fx">ITEM RECOGIDO</div>
+    <div class="sk-hud-countdown hidden" id="hud-countdown">
+      <div class="countdown-num" id="hud-countdown-num">5</div>
+    </div>
+    <div class="sk-hud-power-fx hidden" id="hud-power-fx">TURBO ACTIVO</div>
+    <div class="sk-hud-item-fx hidden" id="hud-item-fx">MISIL RECOGIDO</div>
     <div id="hud-wrong-way" class="hidden">SENTIDO CONTRARIO</div>
     <div id="hud-drift" class="hidden">
       DERRAPE

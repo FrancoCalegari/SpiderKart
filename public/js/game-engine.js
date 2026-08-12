@@ -443,7 +443,25 @@
       e.pos.lerp(e.targetPos, smooth);
       e.angle += shortestAngleDiff(e.angle, e.targetAngle) * smooth;
       e.group.position.copy(e.pos);
-      e.group.rotation.y = -e.angle + Math.PI / 2;
+
+      if (e.spinOutTimer > 0) {
+        e.spinOutTimer -= dt;
+        e.group.rotation.y += dt * 20;
+      } else {
+        e.group.rotation.y = -e.angle + Math.PI / 2;
+      }
+    }
+  }
+
+  function triggerRemoteHit(targetId) {
+    if (targetId === 'local') {
+      if (window.SpiderKart && window.SpiderKart.spinOut) window.SpiderKart.spinOut();
+      return;
+    }
+    const rk = remoteKarts[targetId];
+    if (rk) {
+      rk.spinOutTimer = 1.5;
+      spawnPickupBurst(rk.pos.x, rk.pos.y + 0.5, rk.pos.z);
     }
   }
 
@@ -456,7 +474,7 @@
   const pColors    = new Float32Array(PARTICLE_COUNT * 3);
   const pVelocities = [];
   for (let i = 0; i < PARTICLE_COUNT; i++) {
-    pPositions[i * 3] = pPositions[i * 3 + 1] = pPositions[i * 3 + 2] = 9999;
+    pPositions[i * 3] = pPositions[i * 3 + 1] = pPositions[i * 3 + 2] = 0;
     pColors[i * 3] = 1; pColors[i * 3 + 1] = 0.3; pColors[i * 3 + 2] = 0.1;
     pVelocities.push({ x: 0, y: 0, z: 0, life: 0, maxLife: 0 });
   }
@@ -467,6 +485,7 @@
     sizeAttenuation: true, vertexColors: true
   });
   const particles = new THREE.Points(particleGeo, particleMat);
+  particles.frustumCulled = false;
   scene.add(particles);
   let nextParticle = 0;
 
@@ -652,8 +671,9 @@
     bestLap: -1,
     raceFinished: false,
     raceEndTime: 0,
-    isLocked: false,
-    heldItem: null, // 'boost', 'missile', 'homing'
+    isLocked: true,
+    missiles: [], // Almacén de hasta 3 misiles
+    missileCooldown: 0,
     spinOutTimer: 0
   };
 
@@ -688,6 +708,70 @@
   const driftBar       = document.getElementById('drift-bar');
   const minimapCanvas  = document.getElementById('minimap-canvas');
   const minimapCtx     = minimapCanvas ? minimapCanvas.getContext('2d') : null;
+  const hudCountdown    = document.getElementById('hud-countdown');
+  const hudCountdownNum = document.getElementById('hud-countdown-num');
+  const missileSlots = [
+    document.getElementById('missile-slot-0'),
+    document.getElementById('missile-slot-1'),
+    document.getElementById('missile-slot-2')
+  ];
+
+  function updateMissileHUD() {
+    for (let i = 0; i < 3; i++) {
+      const slot = missileSlots[i];
+      if (!slot) continue;
+      const item = state.missiles[i];
+      if (item === 'missile') {
+        slot.className = 'sk-missile-slot active-straight';
+        slot.innerHTML = '<i class="fa-solid fa-crosshair"></i>';
+      } else if (item === 'homing') {
+        slot.className = 'sk-missile-slot active-homing';
+        slot.innerHTML = '<i class="fa-solid fa-bullseye"></i>';
+      } else {
+        slot.className = 'sk-missile-slot';
+        slot.innerHTML = '<i class="fa-solid fa-crosshair"></i>';
+      }
+    }
+  }
+
+  let localCountdownTimer = null;
+
+  function showCountdownNum(val) {
+    if (!hudCountdown || !hudCountdownNum) return;
+    hudCountdown.classList.remove('hidden');
+    hudCountdownNum.textContent = val;
+    hudCountdownNum.classList.toggle('go', val === 'GO!' || val === '¡GO!');
+    void hudCountdownNum.offsetWidth;
+    hudCountdownNum.style.animation = 'none';
+    requestAnimationFrame(() => { hudCountdownNum.style.animation = ''; });
+  }
+
+  function hideCountdown() {
+    if (hudCountdown) hudCountdown.classList.add('hidden');
+  }
+
+  function startLocalCountdown() {
+    if (localCountdownTimer) clearInterval(localCountdownTimer);
+    state.isLocked = true;
+    let count = 5;
+    showCountdownNum(count);
+
+    localCountdownTimer = setInterval(() => {
+      count--;
+      if (count > 0) {
+        showCountdownNum(count);
+      } else if (count === 0) {
+        showCountdownNum('GO!');
+        state.isLocked = false;
+        state.raceStartTime = performance.now();
+        state.lapStartTime  = performance.now();
+      } else {
+        clearInterval(localCountdownTimer);
+        localCountdownTimer = null;
+        setTimeout(hideCountdown, 800);
+      }
+    }, 1000);
+  }
 
   /* ──────────────────────────────────────────
      Minimapa — pre-calculo de bounds y puntos
@@ -833,19 +917,18 @@
           p.mesh.visible = false;
           spawnPickupBurst(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z);
           
-          if (!state.heldItem) {
-            const rand = Math.random();
-            if (rand < 0.33) state.heldItem = 'boost';
-            else if (rand < 0.66) state.heldItem = 'missile';
-            else state.heldItem = 'homing';
-          }
+          if (state.missiles.length < 3) {
+            const newItem = Math.random() < 0.5 ? 'missile' : 'homing';
+            state.missiles.push(newItem);
+            updateMissileHUD();
 
-          if (hudItemFx) {
-            hudItemFx.classList.remove('hidden');
-            hudItemFx.textContent = state.heldItem.toUpperCase();
-            void hudItemFx.offsetWidth;
-            hudItemFx.style.animation = 'none';
-            requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+            if (hudItemFx) {
+              hudItemFx.classList.remove('hidden');
+              hudItemFx.textContent = newItem === 'homing' ? 'MISIL TELEDIRIGIDO' : 'MISIL PUNTERÍA';
+              void hudItemFx.offsetWidth;
+              hudItemFx.style.animation = 'none';
+              requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+            }
           }
         }
       } else {
@@ -929,6 +1012,21 @@
       m.mesh.position.set(m.x, m.y, m.z);
       m.mesh.rotation.y = -m.angle + Math.PI / 2;
 
+      // Estela de partículas del misil
+      for (let k = 0; k < 2; k++) {
+        spawnParticle(
+          m.x + (Math.random() - 0.5) * 0.3,
+          m.y + (Math.random() - 0.5) * 0.3,
+          m.z + (Math.random() - 0.5) * 0.3,
+          (Math.random() - 0.5) * 0.03,
+          Math.random() * 0.04,
+          (Math.random() - 0.5) * 0.03,
+          m.type === 'homing' ? 1.0 : 0.2,
+          m.type === 'homing' ? 0.2 : 1.0,
+          0.2
+        );
+      }
+
       // Colisión con otros karts
       let hitSomeone = false;
       for (const id in remoteKarts) {
@@ -938,6 +1036,7 @@
         if (dx*dx + dz*dz < 4) { // Radio de colisión 2^2
           hitSomeone = true;
           spawnPickupBurst(m.x, m.y, m.z); // Explosión visual
+          triggerRemoteHit(id);
           if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.sendHit) {
             window.SpiderKartMultiplayer.sendHit(id);
           }
@@ -982,16 +1081,22 @@
       return;
     }
 
-    const forward  = (keys['KeyW'] || keys['ArrowUp']);
-    const backward = (keys['KeyS'] || keys['ArrowDown']);
-    const left     = (keys['KeyA'] || keys['ArrowLeft']);
-    const right    = (keys['KeyD'] || keys['ArrowRight']);
-    const jumpKey  = keys['Space'];
-    const powerKey = keys['KeyK'];
-    const turning  = left || right;
+    const forward    = (keys['KeyW'] || keys['ArrowUp']);
+    const backward   = (keys['KeyS'] || keys['ArrowDown']);
+    const left       = (keys['KeyA'] || keys['ArrowLeft']);
+    const right      = (keys['KeyD'] || keys['ArrowRight']);
+    const jumpKey    = keys['Space'];
+    const powerKey   = keys['KeyK'];
+    const missileKey = keys['KeyE'];
+    const turning    = left || right;
 
-    // ── Power / boost ──
+    // ── Turbo (Tecla K) ──
     if (state.powerCooldown > 0) state.powerCooldown -= dt;
+    if (powerKey && state.powerTimer <= 0 && state.powerCooldown <= 0) {
+      state.powerTimer = 3.0;
+      state.powerCooldown = 1.0;
+    }
+
     if (state.powerTimer > 0) {
       state.powerTimer -= dt;
       state.powerActive = true;
@@ -1005,18 +1110,13 @@
       if (hudPowerFx) hudPowerFx.classList.add('hidden');
     }
 
-    // ── Uso de Inventario (Powerups) ──
-    if (powerKey && state.heldItem && state.powerCooldown <= 0) {
-      if (state.heldItem === 'boost') {
-        state.powerTimer = 3.0;
-      } else if (state.heldItem === 'missile') {
-        spawnMissile('missile');
-      } else if (state.heldItem === 'homing') {
-        spawnMissile('homing');
-      }
-      state.heldItem = null;
-      state.powerCooldown = 0.5;
-      if (hudItemFx) hudItemFx.classList.add('hidden');
+    // ── Disparo de Misiles (Tecla E) ──
+    if (state.missileCooldown > 0) state.missileCooldown -= dt;
+    if (missileKey && state.missiles.length > 0 && state.missileCooldown <= 0) {
+      const launched = state.missiles.shift();
+      spawnMissile(launched);
+      updateMissileHUD();
+      state.missileCooldown = 0.3;
     }
 
     // ── Aceleración ──
@@ -1134,17 +1234,19 @@
     // ── Update particles ──
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       if (pVelocities[i].life > 0) {
-        pVelocities[i].life -= dt * 1.2;
+        pVelocities[i].life -= dt * 1.5;
         pPositions[i * 3]     += pVelocities[i].x;
         pPositions[i * 3 + 1] += pVelocities[i].y;
         pPositions[i * 3 + 2] += pVelocities[i].z;
         pVelocities[i].y -= 0.002;
         if (pVelocities[i].life <= 0) {
-          pPositions[i * 3] = pPositions[i * 3 + 1] = pPositions[i * 3 + 2] = 9999;
+          pPositions[i * 3] = pPositions[i * 3 + 1] = pPositions[i * 3 + 2] = 0;
+          pColors[i * 3] = pColors[i * 3 + 1] = pColors[i * 3 + 2] = 0;
         }
       }
     }
     particleGeo.attributes.position.needsUpdate = true;
+    particleGeo.attributes.color.needsUpdate = true;
 
     // ── Luces ──
     redLight.position.set(state.posX, state.posY + 4, state.posZ);
@@ -1238,18 +1340,38 @@
     resetRace() {
       state.lap = 0;
       state.raceFinished = false;
-      state.raceStartTime = performance.now();
-      state.lapStartTime  = performance.now();
       state.bestLap = -1;
       state.lastLapTime = -1;
+      state.missiles = [];
+      updateMissileHUD();
       resetCheckpoints();
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
+      startLocalCountdown();
     },
+    setCountdown(seconds) {
+      if (localCountdownTimer) {
+        clearInterval(localCountdownTimer);
+        localCountdownTimer = null;
+      }
+      if (seconds > 0) {
+        state.isLocked = true;
+        showCountdownNum(seconds);
+      } else {
+        showCountdownNum('GO!');
+        state.isLocked = false;
+        state.raceStartTime = performance.now();
+        state.lapStartTime  = performance.now();
+        setTimeout(hideCountdown, 800);
+      }
+    },
+    triggerRemoteHit,
     lockAndReset(positionIndex = 0) {
       state.isLocked = true;
       state.speed = 0;
       state.velY = 0;
       state.spinOutTimer = 0;
+      state.missiles = [];
+      updateMissileHUD();
       
       // Offset lateral basado en positionIndex
       const lateralOffset = (positionIndex % 2 === 0 ? 1 : -1) * (2 + Math.floor(positionIndex/2) * 2);
@@ -1276,6 +1398,9 @@
     trackHalfWidth: HALF_WIDTH,
     startPoint: { x: startSample.x, z: startSample.z, angle: startAngle0 }
   };
+
+  // Iniciar conteo local al arrancar
+  startLocalCountdown();
 
   animate();
 })();
