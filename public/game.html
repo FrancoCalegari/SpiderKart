@@ -277,12 +277,25 @@
     #hud-wrong-way {
       position: absolute; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
       font-size: 2rem; letter-spacing: 0.25em; font-weight: 900;
       color: #ff0000; text-shadow: 0 0 40px rgba(255,0,0,0.8), 0 0 80px rgba(255,0,0,0.4);
       font-family: 'Barlow Condensed', sans-serif;
       animation: wrongWayPulse 0.5s ease-in-out infinite alternate;
     }
     #hud-wrong-way.hidden { display: none; }
+    .wrong-way-bar-wrap {
+      width: 160px; height: 5px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .wrong-way-bar {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #ff6600, #ff0000);
+      border-radius: 3px;
+      transition: width 0.1s linear;
+    }
     @keyframes wrongWayPulse {
       from { opacity: 0.5; transform: translate(-50%,-50%) scale(0.96); }
       to   { opacity: 1;   transform: translate(-50%,-50%) scale(1.04); }
@@ -448,7 +461,10 @@
       <div class="lap-announce-label" id="lap-announce-label">VUELTA</div>
       <div class="lap-announce-num" id="lap-announce-num">2</div>
     </div>
-    <div id="hud-wrong-way" class="hidden">SENTIDO CONTRARIO</div>
+    <div id="hud-wrong-way" class="hidden">
+      SENTIDO CONTRARIO
+      <div class="wrong-way-bar-wrap"><div class="wrong-way-bar" id="wrong-way-bar"></div></div>
+    </div>
     <div id="hud-drift" class="hidden">
       DERRAPE
       <div class="drift-bar-wrap"><div class="drift-bar" id="drift-bar"></div></div>

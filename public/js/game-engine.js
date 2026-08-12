@@ -862,6 +862,7 @@
     nextCheckpoint: 1,
     checkpointsPassed: 0,
     isWrongWay: false,
+    wrongWayTimer: 0, // Segundos acumulados yendo en sentido contrario
     // Drift
     isDrifting: false,
     driftPower: 0,      // 0..1 — crece mientras dura el derrape
@@ -916,6 +917,7 @@
   const minimapCtx     = minimapCanvas ? minimapCanvas.getContext('2d') : null;
   const hudCountdown    = document.getElementById('hud-countdown');
   const hudCountdownNum = document.getElementById('hud-countdown-num');
+  const wrongWayBar     = document.getElementById('wrong-way-bar');
   const hudLapAnnounce  = document.getElementById('hud-lap-announce');
   const lapAnnounceNum  = document.getElementById('lap-announce-num');
   const lapAnnounceLabel= document.getElementById('lap-announce-label');
@@ -1095,7 +1097,7 @@
   /* ──────────────────────────────────────────
      Track collision + progreso de vuelta
   ────────────────────────────────────────── */
-  function resolveTrackCollision() {
+  function resolveTrackCollision(dt) {
     let bestIdx = -1;
     let bestDist = Infinity;
     const searchWindow = 60;
@@ -1129,14 +1131,37 @@
       state.speed = vTangent * WALL_FRICTION;
     }
 
-    // Detección de sentido contrario:
-    // producto escalar entre dirección del kart y tangente de pista.
-    // Si es negativo el kart va contra el flujo del circuito.
+    // Detección de sentido contrario
     const dirX = Math.cos(state.angle);
     const dirZ = Math.sin(state.angle);
     const dot = dirX * sample.tan.x + dirZ * sample.tan.z;
     // Solo activa el aviso si el kart se mueve (no si está quieto)
-    state.isWrongWay = (Math.abs(state.speed) > 0.04) && (dot < -0.2);
+    const nowWrongWay = (Math.abs(state.speed) > 0.04) && (dot < -0.2);
+    state.isWrongWay = nowWrongWay;
+
+    // Acumular tiempo en sentido contrario
+    if (nowWrongWay) {
+      // dt se pasa desde update() pero aquí no tenemos acceso — usamos un estimado de 1/60
+      // Se acumula via resolveTrackCollision que se llama cada frame desde update(dt)
+      state.wrongWayTimer += dt;
+      if (state.wrongWayTimer >= 5.0) {
+        // Teleportar al último checkpoint válido que el jugador cruzó
+        const lastCpIdx = ((state.nextCheckpoint - 1) + CHECKPOINT_COUNT) % CHECKPOINT_COUNT;
+        const lastCp = checkpoints[lastCpIdx];
+        const cpSample = trackSamples[lastCp.idx];
+        // Posicionar al kart en el checkpoint, orientado en el sentido correcto
+        state.posX = cpSample.x;
+        state.posZ = cpSample.z;
+        state.posY = 0;
+        state.angle = Math.atan2(cpSample.tan.z, cpSample.tan.x);
+        state.speed = 0;
+        state.isWrongWay = false;
+        state.wrongWayTimer = 0;
+        spawnPickupBurst(state.posX, 1.0, state.posZ);
+      }
+    } else {
+      state.wrongWayTimer = 0;
+    }
 
     updateCheckpointProgress(bestIdx);
     state.lastT = sample.t;
@@ -1476,7 +1501,7 @@
     state.posX += Math.cos(state.angle) * state.speed;
     state.posZ += Math.sin(state.angle) * state.speed;
 
-    resolveTrackCollision();
+    resolveTrackCollision(dt);
     updatePowerups(dt);
     updateRemoteKarts(dt);
 
@@ -1574,8 +1599,9 @@
       }
     }
 
-    // Sentido contrario
+    // Sentido contrario + barra de temporizador
     if (hudWrongWay) hudWrongWay.classList.toggle('hidden', !state.isWrongWay);
+    if (wrongWayBar) wrongWayBar.style.width = Math.min(state.wrongWayTimer / 5.0 * 100, 100) + '%';
 
     // Indicador de drift
     if (hudDrift) {
@@ -1667,6 +1693,7 @@
       state.velY = 0;
       state.spinOutTimer = 0;
       state.invulnerableTimer = 0;
+      state.wrongWayTimer = 0;
       kartGroup.visible = true;
       state.missiles = [];
       updateMissileHUD();
