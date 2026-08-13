@@ -1,6 +1,9 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 const API = 'https://spiderwebargapi.com.ar/api/v1';
-const KEY = 'c20cdfd802d9e387d77176ee597ac66f26b9513bd15d2a95886d34befc0b7ad6';
-const DB = 'sw_Franco Calegari_SpiderKart';
+const KEY = process.env.spiderapikey;
+const DB = process.env.spiderdbname;
 
 async function initDb() {
     const queryUsers = `
