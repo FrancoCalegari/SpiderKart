@@ -119,18 +119,42 @@
       position: absolute; bottom: 24px; right: 24px;
       display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
     }
-    .sk-hud-label { font-size: 0.6rem; letter-spacing: 0.2em; color: #555; }
+    .sk-hud-label {
+      font-size: 0.62rem; letter-spacing: 0.18em; color: #00ff66;
+      font-weight: 700; transition: color 0.3s ease;
+      text-shadow: 0 0 8px currentColor;
+    }
     .sk-hud-bar {
-      width: 120px; height: 6px;
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(163,0,0,0.3);
-      clip-path: polygon(0 0,calc(100% - 4px) 0,100% 4px,100% 100%,4px 100%,0 calc(100% - 4px));
+      width: 140px; height: 8px;
+      background: rgba(10,10,20,0.85);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 0 10px rgba(0,0,0,0.7);
+      position: relative;
     }
     .sk-hud-fill {
       height: 100%; width: 100%;
-      background: linear-gradient(90deg,#6b0000,#a30000);
-      transition: width 0.1s;
-      box-shadow: 0 0 8px rgba(163,0,0,0.6);
+      background: linear-gradient(90deg, #00bb44, #00ff66);
+      transition: width 0.08s linear;
+      box-shadow: 0 0 10px rgba(0,255,102,0.6);
+    }
+    .sk-hud-fill.ready {
+      background: linear-gradient(90deg, #00aa44, #00ff66);
+      box-shadow: 0 0 12px rgba(0,255,102,0.8);
+    }
+    .sk-hud-fill.active {
+      background: linear-gradient(90deg, #ff5500, #ffcc00);
+      box-shadow: 0 0 16px rgba(255,180,0,0.9);
+      animation: turboPulse 0.35s infinite alternate;
+    }
+    .sk-hud-fill.recharging {
+      background: linear-gradient(90deg, #880000, #ff3344);
+      box-shadow: 0 0 10px rgba(255,51,68,0.6);
+    }
+    @keyframes turboPulse {
+      from { filter: brightness(1); }
+      to { filter: brightness(1.4); }
     }
 
     /* Controles — esquina inferior centro */
@@ -431,22 +455,22 @@
     <div class="sk-hud-missiles" id="hud-missiles">
       <div class="sk-hud-missiles-label">[ E ] MISILES</div>
       <div class="sk-hud-missiles-slots">
-        <div class="sk-missile-slot" id="missile-slot-0"><i class="fa-solid fa-crosshair"></i></div>
-        <div class="sk-missile-slot" id="missile-slot-1"><i class="fa-solid fa-crosshair"></i></div>
-        <div class="sk-missile-slot" id="missile-slot-2"><i class="fa-solid fa-crosshair"></i></div>
+        <div class="sk-missile-slot" id="missile-slot-0"></div>
+        <div class="sk-missile-slot" id="missile-slot-1"></div>
+        <div class="sk-missile-slot" id="missile-slot-2"></div>
       </div>
     </div>
 
     <!-- BOTTOM-RIGHT: Power bar -->
     <div class="sk-hud-power">
-      <span class="sk-hud-label">[ K ] TURBO</span>
-      <div class="sk-hud-bar"><div class="sk-hud-fill" id="hud-power-fill"></div></div>
+      <span class="sk-hud-label" id="hud-power-label">[ K ] TURBO LISTO</span>
+      <div class="sk-hud-bar"><div class="sk-hud-fill ready" id="hud-power-fill"></div></div>
     </div>
 
     <!-- BOTTOM: Controles -->
     <div class="sk-hud-controls">
       <span>WASD / FLECHAS — MOVER</span>
-      <span>SPACE — DERRAPE</span>
+      <span>ESPACIO — DERRAPE</span>
       <span>E — DISPARAR MISIL</span>
       <span>K — TURBO</span>
     </div>
@@ -474,7 +498,7 @@
   <!-- Pantalla de victoria / fin de carrera -->
   <div id="finish-screen">
     <div class="fs-tag">// CARRERA COMPLETADA</div>
-    <div class="fs-title">FINISH <span>LINE</span></div>
+    <div class="fs-title">LÍNEA DE <span>META</span></div>
     <div class="fs-times">
       <div class="fs-time-row">TIEMPO TOTAL: <strong id="fs-total-time">--</strong></div>
       <div class="fs-time-row best">MEJOR VUELTA: <strong id="fs-best-time">--</strong></div>

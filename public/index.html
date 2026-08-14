@@ -78,7 +78,7 @@
       </div>
       <div class="sw-modal__body">
         <h2 class="sw-modal__title">CREAR CUENTA</h2>
-        <p class="sw-modal__sub">Registrate para competir en el leaderboard</p>
+        <p class="sw-modal__sub">Registrate para competir en el ranking</p>
         <form id="register-form">
           <div class="sw-form-group">
             <label class="sw-label" for="register-username">// USUARIO</label>
@@ -115,7 +115,7 @@
         
         <!-- Auth state (sin sesión) -->
         <li id="nav-auth-btns">
-          <button class="sw-btn sw-btn--ghost sw-btn--sm" onclick="toggleModal('login-modal')">LOGIN</button>
+          <button class="sw-btn sw-btn--ghost sw-btn--sm" onclick="toggleModal('login-modal')">INGRESAR</button>
           <button class="sw-btn sw-btn--primary sw-btn--sm" onclick="toggleModal('register-modal')">REGISTRO</button>
         </li>
         <!-- Auth state (con sesión) -->
@@ -143,7 +143,7 @@
       <h1 class="hero-headline">
         <span class="headline-line1">SPIDER</span><br>
         <span class="headline-line2"><span class="text-accent">KART</span></span><br>
-        <span class="headline-line3 headline-sub">BROWSER RACING</span>
+        <span class="headline-line3 headline-sub">CARRERAS 3D</span>
       </h1>
       <p class="hero-desc">
         Juego de karts 3D en el navegador, desarrollado por <strong>SpiderWebARG</strong>.<br>Competí, subí al top del ranking y demostrá quién es el más rápido.
@@ -156,12 +156,12 @@
       <div class="hero-metrics">
         <div class="metric-block">
           <div class="metric-val">3D</div>
-          <div class="metric-label">THREE.JS ENGINE</div>
+          <div class="metric-label">MOTOR THREE.JS</div>
         </div>
         <div class="metric-divider"></div>
         <div class="metric-block">
           <div class="metric-val">RT</div>
-          <div class="metric-label">REAL-TIME SCORES</div>
+          <div class="metric-label">PUNTAJES EN TIEMPO REAL</div>
         </div>
       </div>
     </div>
@@ -224,7 +224,7 @@
             <div class="terminal-dots">
               <span class="t-dot red"></span><span class="t-dot yellow"></span><span class="t-dot green"></span>
             </div>
-            <span class="terminal-label">leaderboard.sql — live</span>
+            <span class="terminal-label">ranking.sql — en vivo</span>
             <button class="lb-refresh-btn" onclick="loadLeaderboard()">
               <i class="fa-solid fa-arrows-rotate"></i>
             </button>
@@ -236,7 +236,7 @@
                 <tr>
                   <th>#</th>
                   <th>PILOTO</th>
-                  <th>SCORE</th>
+                  <th>PUNTOS</th>
                 </tr>
               </thead>
               <tbody id="leaderboard-list">
@@ -287,7 +287,7 @@
   <footer class="sw-footer">
     <div class="sw-footer__inner">
       <span class="sw-footer__copy">© 2026 SPIDERWEBARG — UNDERCODE EVENT</span>
-      <span class="sw-footer__status"><span class="sw-pulse"></span> SYSTEM ONLINE</span>
+      <span class="sw-footer__status"><span class="sw-pulse"></span> SISTEMA EN LÍNEA</span>
     </div>
   </footer>
 

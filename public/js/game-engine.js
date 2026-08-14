@@ -905,12 +905,14 @@
 
   const activeMissiles = [];
 
-  const ACCEL      = 0.012;
-  const MAX_SPEED  = 0.6;
-  const BOOST_MULT = 1.8;
-  const STEER      = 0.032;
+  const ACCEL      = 0.024;
+  const MAX_SPEED  = 1.1;
+  const BOOST_MULT = 1.3;
+  const STEER      = 0.036;
+  const TURBO_DURATION = 3.0; // Duración del turbo activo (s)
+  const TURBO_COOLDOWN = 6.0; // Tiempo de recarga del turbo (s)
   const GRAVITY    = -0.018;
-  const JUMP_VEL   = 0.16;   // salto más corto para favorecer mecánica de derrape
+  const JUMP_VEL   = 0.16;   // salto más corto
   const GROUND_Y   = 0;
   const WALL_MARGIN     = 0.9;
   const WALL_CORRECTION = 0.35;
@@ -976,7 +978,7 @@
       const item = state.missiles[i];
       if (item === 'missile') {
         slot.className = 'sk-missile-slot active-straight';
-        slot.innerHTML = '<i class="fa-solid fa-crosshair"></i>';
+        slot.innerHTML = '<i class="fa-solid fa-rocket"></i>';
       } else if (item === 'homing') {
         slot.className = 'sk-missile-slot active-homing';
         slot.innerHTML = '<i class="fa-solid fa-bullseye"></i>';
@@ -985,7 +987,7 @@
         slot.innerHTML = '<i class="fa-solid fa-bolt"></i>';
       } else {
         slot.className = 'sk-missile-slot';
-        slot.innerHTML = '<i class="fa-solid fa-crosshair"></i>';
+        slot.innerHTML = '';
       }
     }
   }
@@ -996,7 +998,7 @@
     if (!hudCountdown || !hudCountdownNum) return;
     hudCountdown.classList.remove('hidden');
     hudCountdownNum.textContent = val;
-    hudCountdownNum.classList.toggle('go', val === 'GO!' || val === '¡GO!');
+    hudCountdownNum.classList.toggle('go', val === 'GO!' || val === '¡GO!' || val === '¡YA!' || val === 'YA!');
     void hudCountdownNum.offsetWidth;
     hudCountdownNum.style.animation = 'none';
     requestAnimationFrame(() => { hudCountdownNum.style.animation = ''; });
@@ -1017,7 +1019,7 @@
       if (count > 0) {
         showCountdownNum(count);
       } else if (count === 0) {
-        showCountdownNum('GO!');
+        showCountdownNum('¡YA!');
         state.isLocked = false;
         state.raceStartTime = performance.now();
         state.lapStartTime  = performance.now();
@@ -1193,10 +1195,18 @@
   function updatePowerups(dt) {
     for (const p of powerups) {
       if (p.active) {
+        // Animar crecimiento al regenerarse (evita que queden pequeños)
+        if (p.mesh.scale.x < 1.0) {
+          const nextScale = Math.min(1.0, p.mesh.scale.x + dt * 4.0);
+          p.mesh.scale.setScalar(nextScale);
+        }
+
         const bob = Math.sin(Date.now() * 0.003 + p.basePos.x) * 0.15;
         p.mesh.position.y = p.basePos.y + bob;
         p.mesh.rotation.y += dt * 1.6;
-        p.mesh.children[1].rotation.z += dt * 0.8;
+        if (p.mesh.children[1]) {
+          p.mesh.children[1].rotation.z += dt * 0.8;
+        }
 
         const dx = state.posX - p.mesh.position.x;
         const dz = state.posZ - p.mesh.position.z;
@@ -1206,27 +1216,48 @@
           p.mesh.visible = false;
           spawnPickupBurst(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z);
           
-          if (state.missiles.length < 3) {
-            const newItem = p.type || 'missile';
-            state.missiles.push(newItem);
-            updateMissileHUD();
-
+          if (p.type === 'boost') {
+            // Turbo automático inmediato al agarrar orbe de velocidad
+            state.powerTimer = Math.max(state.powerTimer, 3.5);
+            state.boost = BOOST_MULT;
+            state.powerActive = true;
+            state.speed = Math.max(state.speed, MAX_SPEED * 1.25);
+            if (hudPowerFx) {
+              hudPowerFx.classList.remove('hidden');
+              hudPowerFx.textContent = '¡TURBO ACTIVADO!';
+            }
             if (hudItemFx) {
               hudItemFx.classList.remove('hidden');
-              hudItemFx.textContent = newItem === 'homing' ? 'MISIL TELEDIRIGIDO' : (newItem === 'boost' ? 'TURBO VELOCIDAD' : 'MISIL PUNTERÍA');
-              hudItemFx.style.color = newItem === 'homing' ? '#ff2244' : (newItem === 'boost' ? '#ffcc00' : '#00ff66');
+              hudItemFx.textContent = 'TURBO VELOCIDAD';
+              hudItemFx.style.color = '#ffcc00';
               void hudItemFx.offsetWidth;
               hudItemFx.style.animation = 'none';
               requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+            }
+          } else {
+            // Misiles en inventario (verde o teledirigido rojo)
+            if (state.missiles.length < 3) {
+              const newItem = p.type || 'missile';
+              state.missiles.push(newItem);
+              updateMissileHUD();
+
+              if (hudItemFx) {
+                hudItemFx.classList.remove('hidden');
+                hudItemFx.textContent = newItem === 'homing' ? 'MISIL TELEDIRIGIDO' : 'MISIL PUNTERÍA';
+                hudItemFx.style.color = newItem === 'homing' ? '#ff2244' : '#00ff66';
+                void hudItemFx.offsetWidth;
+                hudItemFx.style.animation = 'none';
+                requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+              }
             }
           }
         }
       } else {
         p.respawnTimer -= dt;
         if (p.respawnTimer <= 0) {
-          p.active = true; p.mesh.visible = true; p.mesh.scale.setScalar(0.2);
-        } else if (p.mesh.scale.x < 1) {
-          p.mesh.scale.setScalar(Math.min(1, p.mesh.scale.x + dt * 3));
+          p.active = true;
+          p.mesh.visible = true;
+          p.mesh.scale.setScalar(0.15); // Aparece pequeño y crece suavemente hasta 1.0
         }
       }
     }
@@ -1255,7 +1286,7 @@
       type,
       x: startX, y: state.posY + 0.5, z: startZ,
       angle: state.angle,
-      speed: 1.2, // Doble de rápido que un kart
+      speed: 2.7, // Rápido para superar karts en turbo
       life: 5.0 // Segundos antes de desaparecer
     });
   }
@@ -1271,29 +1302,49 @@
       }
 
       if (m.type === 'homing') {
-        // Buscar el kart más cercano por delante
-        let bestTarget = null;
+        // Buscar el objetivo más cercano por delante (karts remotos u obstáculos activos)
+        let targetX = null;
+        let targetZ = null;
         let bestDist = Infinity;
+
         for (const id in remoteKarts) {
           const rk = remoteKarts[id];
           const dx = rk.pos.x - m.x;
           const dz = rk.pos.z - m.z;
-          const dist = Math.sqrt(dx*dx + dz*dz);
-          if (dist < 40) { // Rango de visión
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          if (dist < 45) { // Rango de visión
             const angleToTarget = Math.atan2(dz, dx);
             const angleDiff = Math.abs(shortestAngleDiff(m.angle, angleToTarget));
             if (angleDiff < Math.PI / 3 && dist < bestDist) { // Solo si está más o menos en frente
               bestDist = dist;
-              bestTarget = rk;
+              targetX = rk.pos.x;
+              targetZ = rk.pos.z;
             }
           }
         }
-        if (bestTarget) {
-          const dx = bestTarget.pos.x - m.x;
-          const dz = bestTarget.pos.z - m.z;
+
+        for (const obs of obstacles) {
+          if (!obs.active) continue;
+          const dx = obs.x - m.x;
+          const dz = obs.z - m.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          if (dist < 45) { // Rango de visión
+            const angleToTarget = Math.atan2(dz, dx);
+            const angleDiff = Math.abs(shortestAngleDiff(m.angle, angleToTarget));
+            if (angleDiff < Math.PI / 3 && dist < bestDist) {
+              bestDist = dist;
+              targetX = obs.x;
+              targetZ = obs.z;
+            }
+          }
+        }
+
+        if (targetX !== null && targetZ !== null) {
+          const dx = targetX - m.x;
+          const dz = targetZ - m.z;
           const targetAngle = Math.atan2(dz, dx);
           const diff = shortestAngleDiff(m.angle, targetAngle);
-          m.angle += diff * Math.min(1, dt * 4); // Girar hacia el objetivo
+          m.angle += diff * Math.min(1, dt * 5); // Girar hacia el objetivo
         }
       }
 
@@ -1334,9 +1385,9 @@
         }
       }
 
-      // Colisión con obstáculos (solo misiles verdes 'missile')
+      // Colisión con obstáculos (misiles verdes 'missile' y teledirigidos 'homing')
       let hitObstacle = false;
-      if (!hitSomeone && m.type === 'missile') {
+      if (!hitSomeone && (m.type === 'missile' || m.type === 'homing')) {
         for (const obs of obstacles) {
           if (!obs.active) continue;
           const dx = obs.x - m.x;
@@ -1443,10 +1494,8 @@
     const turning    = left || right;
 
     // ── Turbo (Tecla K) ──
-    if (state.powerCooldown > 0) state.powerCooldown -= dt;
     if (powerKey && state.powerTimer <= 0 && state.powerCooldown <= 0) {
-      state.powerTimer = 3.0;
-      state.powerCooldown = 1.0;
+      state.powerTimer = TURBO_DURATION;
     }
 
     if (state.powerTimer > 0) {
@@ -1455,11 +1504,23 @@
       state.boost = BOOST_MULT;
       flames.forEach(f => { f.visible = true; f.scale.setScalar(1 + Math.sin(Date.now() * 0.02) * 0.3); });
       if (hudPowerFx) hudPowerFx.classList.remove('hidden');
+
+      // Al agotarse el tiempo de turbo activo, comienza el cooldown de recarga
+      if (state.powerTimer <= 0) {
+        state.powerTimer = 0;
+        state.powerCooldown = TURBO_COOLDOWN;
+      }
     } else {
       state.powerActive = false;
       state.boost = 1;
       flames.forEach(f => { f.visible = false; });
       if (hudPowerFx) hudPowerFx.classList.add('hidden');
+
+      // Recarga progresiva del turbo
+      if (state.powerCooldown > 0) {
+        state.powerCooldown -= dt;
+        if (state.powerCooldown < 0) state.powerCooldown = 0;
+      }
     }
 
     // ── Disparo de Misiles / Usar Ítem (Tecla E) ──
@@ -1622,15 +1683,42 @@
     camera.lookAt(state.posX, state.posY + 1.5, state.posZ);
 
     // ── HUD ──
-    const kmh = Math.round(Math.abs(state.speed) * 300);
+    const kmh = Math.round(Math.abs(state.speed) * 190);
     if (hudSpeed) {
       hudSpeed.textContent = kmh;
       hudSpeed.classList.toggle('boosting', state.powerActive || state.isDrifting);
     }
 
-    const powerPct = state.powerTimer > 0 ? (state.powerTimer / 3.0) * 100
-      : state.powerCooldown > 0 ? (1 - state.powerCooldown / 10) * 100 : 100;
-    if (hudFill) hudFill.style.width = powerPct + '%';
+    const hudPowerLabel = document.getElementById('hud-power-label');
+    if (hudFill) {
+      if (state.powerTimer > 0) {
+        // En uso: la barra se vacía
+        const pct = Math.max(0, Math.min(100, (state.powerTimer / TURBO_DURATION) * 100));
+        hudFill.style.width = pct + '%';
+        hudFill.className = 'sk-hud-fill active';
+        if (hudPowerLabel) {
+          hudPowerLabel.textContent = '[ K ] TURBO ACTIVO';
+          hudPowerLabel.style.color = '#ffcc00';
+        }
+      } else if (state.powerCooldown > 0) {
+        // Recargando: la barra se llena progresivamente
+        const pct = Math.max(0, Math.min(100, (1 - state.powerCooldown / TURBO_COOLDOWN) * 100));
+        hudFill.style.width = pct + '%';
+        hudFill.className = 'sk-hud-fill recharging';
+        if (hudPowerLabel) {
+          hudPowerLabel.textContent = `[ K ] RECARGANDO (${Math.ceil(state.powerCooldown)}s)`;
+          hudPowerLabel.style.color = '#ff4444';
+        }
+      } else {
+        // Listo para usar: 100% lleno
+        hudFill.style.width = '100%';
+        hudFill.className = 'sk-hud-fill ready';
+        if (hudPowerLabel) {
+          hudPowerLabel.textContent = '[ K ] TURBO LISTO';
+          hudPowerLabel.style.color = '#00ff66';
+        }
+      }
+    }
 
     if (hudProgressFill) {
       const progressPct = (state.checkpointsPassed / CHECKPOINT_COUNT) * 100;
@@ -1727,6 +1815,12 @@
         obs.mesh.visible = true;
         if (obs.light) obs.light.visible = true;
       }
+      for (const p of powerups) {
+        p.active = true;
+        p.respawnTimer = 0;
+        p.mesh.visible = true;
+        p.mesh.scale.setScalar(1.0);
+      }
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
       startLocalCountdown();
     },
@@ -1739,7 +1833,7 @@
         state.isLocked = true;
         showCountdownNum(seconds);
       } else {
-        showCountdownNum('GO!');
+        showCountdownNum('¡YA!');
         state.isLocked = false;
         state.raceStartTime = performance.now();
         state.lapStartTime  = performance.now();
