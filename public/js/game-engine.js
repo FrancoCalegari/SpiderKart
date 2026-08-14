@@ -260,6 +260,7 @@
      Obstáculos variados y aleatorizados en la pista
   ────────────────────────────────────────── */
   const OBSTACLE_COUNT = 26;
+  const OBSTACLE_RESPAWN = 7.0; // Segundos para regenerarse tras ser destruido
   const obstacles = [];
 
   function buildObstacles() {
@@ -346,10 +347,13 @@
       obstacles.push({
         mesh: group,
         spike: spikeMesh,
+        light: light,
         x: ox,
         z: oz,
         radius: 1.7 * randScale,
-        color: lightColor
+        color: lightColor,
+        active: true,
+        respawnTimer: 0
       });
     }
   }
@@ -693,6 +697,21 @@
       const a = Math.random() * Math.PI * 2;
       const speed = 0.05 + Math.random() * 0.08;
       spawnParticle(x, y, z, Math.cos(a) * speed, 0.06 + Math.random() * 0.06, Math.sin(a) * speed, 1, 0.8, 0.15);
+    }
+  }
+
+  function spawnObstacleExplosion(x, y, z, colorHex) {
+    const c = new THREE.Color(colorHex || 0x00ff55);
+    for (let i = 0; i < 30; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const speed = 0.07 + Math.random() * 0.12;
+      spawnParticle(
+        x, y + 0.5, z,
+        Math.cos(a) * speed,
+        0.08 + Math.random() * 0.08,
+        Math.sin(a) * speed,
+        c.r, c.g, c.b
+      );
     }
   }
 
@@ -1066,8 +1085,9 @@
     minimapCtx.lineWidth = 2;
     minimapCtx.stroke();
 
-    // Obstáculos en minimapa con sus respectivos colores neón
+    // Obstáculos en minimapa con sus respectivos colores neón (solo si están activos)
     for (const obs of obstacles) {
+      if (!obs.active) continue;
       const { mx: ox, my: oz } = worldToMinimap(obs.x, obs.z);
       minimapCtx.fillStyle = obs.color ? '#' + obs.color.toString(16).padStart(6, '0') : '#ff0055';
       minimapCtx.beginPath();
@@ -1314,7 +1334,31 @@
         }
       }
 
-      if (hitSomeone) {
+      // Colisión con obstáculos (solo misiles verdes 'missile')
+      let hitObstacle = false;
+      if (!hitSomeone && m.type === 'missile') {
+        for (const obs of obstacles) {
+          if (!obs.active) continue;
+          const dx = obs.x - m.x;
+          const dz = obs.z - m.z;
+          const hitRadius = obs.radius + 0.6;
+          if (dx * dx + dz * dz < hitRadius * hitRadius) {
+            hitObstacle = true;
+            obs.active = false;
+            obs.respawnTimer = OBSTACLE_RESPAWN;
+            obs.mesh.visible = false;
+            if (obs.light) obs.light.visible = false;
+            spawnPickupBurst(obs.x, 1.0, obs.z);
+            spawnObstacleExplosion(obs.x, 1.0, obs.z, obs.color);
+            break;
+          }
+        }
+      }
+
+      if (hitSomeone || hitObstacle) {
+        if (hitObstacle) {
+          spawnPickupBurst(m.x, m.y, m.z);
+        }
         scene.remove(m.mesh);
         activeMissiles.splice(i, 1);
       }
@@ -1335,8 +1379,18 @@
       state.invulnerableTimer -= dt;
     }
 
-    // ── Colisión con Obstáculos ──
+    // ── Colisión y Regeneración de Obstáculos ──
     for (const obs of obstacles) {
+      if (!obs.active) {
+        obs.respawnTimer -= dt;
+        if (obs.respawnTimer <= 0) {
+          obs.active = true;
+          obs.mesh.visible = true;
+          if (obs.light) obs.light.visible = true;
+          spawnPickupBurst(obs.x, 1.0, obs.z);
+        }
+        continue;
+      }
       if (obs.spike) obs.spike.rotation.y += dt * 2.0;
       const dx = state.posX - obs.x;
       const dz = state.posZ - obs.z;
@@ -1667,6 +1721,12 @@
       kartGroup.visible = true;
       updateMissileHUD();
       resetCheckpoints();
+      for (const obs of obstacles) {
+        obs.active = true;
+        obs.respawnTimer = 0;
+        obs.mesh.visible = true;
+        if (obs.light) obs.light.visible = true;
+      }
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
       startLocalCountdown();
     },
