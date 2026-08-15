@@ -350,14 +350,268 @@
         light: light,
         x: ox,
         z: oz,
+        height: 1.9 * randScale,
         radius: 1.7 * randScale,
         color: lightColor,
         active: true,
-        respawnTimer: 0
+        respawnTimer: 0,
+        sampleIdx: currentIdx,
+        lateral: lateral
       });
     }
   }
   buildObstacles();
+
+  /* ──────────────────────────────────────────
+     Rampas de Salto 3D (para saltar obstáculos)
+  ────────────────────────────────────────── */
+  const ramps = [];
+  const RAMP_WIDTH = 4.8;
+  const RAMP_LENGTH = 6.8;
+  const RAMP_HEIGHT = 1.45;
+
+  function createRampMesh(width, length, height, isCyan) {
+    const group = new THREE.Group();
+    const halfW = width / 2;
+    const halfL = length / 2;
+
+    // 1. Cuerpo de la rampa (geometría de cuña optimizada)
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array([
+      // Cara inclinada superior (2 triángulos)
+      -halfW, 0.02, -halfL,
+      -halfW, height, +halfL,
+      +halfW, 0.02, -halfL,
+
+      +halfW, 0.02, -halfL,
+      -halfW, height, +halfL,
+      +halfW, height, +halfL,
+
+      // Pared vertical trasera / cresta (2 triángulos)
+      -halfW, height, +halfL,
+      -halfW, 0.02, +halfL,
+      +halfW, height, +halfL,
+
+      +halfW, height, +halfL,
+      -halfW, 0.02, +halfL,
+      +halfW, 0.02, +halfL,
+
+      // Pared lateral izquierda (1 triángulo)
+      -halfW, 0.02, -halfL,
+      -halfW, 0.02, +halfL,
+      -halfW, height, +halfL,
+
+      // Pared lateral derecha (1 triángulo)
+      +halfW, 0.02, -halfL,
+      +halfW, height, +halfL,
+      +halfW, 0.02, +halfL,
+
+      // Base inferior (2 triángulos)
+      -halfW, 0.02, -halfL,
+      +halfW, 0.02, -halfL,
+      -halfW, 0.02, +halfL,
+
+      +halfW, 0.02, -halfL,
+      +halfW, 0.02, +halfL,
+      -halfW, 0.02, +halfL
+    ]);
+
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.computeVertexNormals();
+
+    const rampMat = new THREE.MeshStandardMaterial({
+      color: 0x181826,
+      roughness: 0.5,
+      metalness: 0.7
+    });
+    const wedge = new THREE.Mesh(geo, rampMat);
+    wedge.castShadow = true;
+    wedge.receiveShadow = true;
+    group.add(wedge);
+
+    // 2. Barandillas laterales neón
+    const railColor = isCyan ? 0x00e5ff : 0xffaa00;
+    const railEmissive = isCyan ? 0x00b4d8 : 0xff7700;
+    const railMat = new THREE.MeshStandardMaterial({
+      color: railColor,
+      emissive: railEmissive,
+      emissiveIntensity: 2.2,
+      roughness: 0.2
+    });
+    const railLen = Math.hypot(length, height);
+    const railGeo = new THREE.BoxGeometry(0.2, 0.25, railLen);
+    const railAngle = Math.atan2(height, length);
+
+    const leftRail = new THREE.Mesh(railGeo, railMat);
+    leftRail.position.set(-halfW, height / 2 + 0.1, 0);
+    leftRail.rotation.x = -railAngle;
+    group.add(leftRail);
+
+    const rightRail = new THREE.Mesh(railGeo, railMat);
+    rightRail.position.set(+halfW, height / 2 + 0.1, 0);
+    rightRail.rotation.x = -railAngle;
+    group.add(rightRail);
+
+    // 3. Flechas chevron luminosas en la rampa
+    const chevronColor = isCyan ? 0x66ffff : 0xffea00;
+    const chevronEmissive = isCyan ? 0x00e5ff : 0xffbb00;
+    const chevronMat = new THREE.MeshStandardMaterial({
+      color: chevronColor,
+      emissive: chevronEmissive,
+      emissiveIntensity: 2.8,
+      roughness: 0.1
+    });
+    const chevronGeo = new THREE.ConeGeometry(0.7, 1.2, 3);
+    chevronGeo.rotateX(Math.PI / 2);
+
+    [-1.2, 0.8].forEach(zOffset => {
+      const frac = (zOffset + halfL) / length;
+      const arrowY = frac * height + 0.06;
+      const chevron = new THREE.Mesh(chevronGeo, chevronMat);
+      chevron.position.set(0, arrowY, zOffset);
+      chevron.rotation.x = -railAngle;
+      chevron.scale.set(1.4, 0.9, 0.25);
+      group.add(chevron);
+    });
+
+    return group;
+  }
+
+  function buildRamps() {
+    // 8 rampas colocadas estratégicamente en rectas, curvas y carriles alternativos
+    // independientes de los obstáculos para que los obstáculos mantengan su dificultad
+    const rampConfigs = [
+      { sampleIdx: 45,  lane: 0.0,   type: 'gold' }, // Recta de inicio: rampa central de despegue
+      { sampleIdx: 120, lane: 0.45,  type: 'cyan' }, // Curva abierta: rampa en carril exterior
+      { sampleIdx: 190, lane: -0.4,  type: 'gold' }, // Tramo intermedio: carril interior
+      { sampleIdx: 260, lane: 0.0,   type: 'cyan' }, // Gran salto en recta técnica
+      { sampleIdx: 330, lane: 0.4,   type: 'gold' }, // Salida de curva amplia
+      { sampleIdx: 400, lane: -0.45, type: 'cyan' }, // Desafío en chicane rápida
+      { sampleIdx: 475, lane: 0.0,   type: 'gold' }, // Salto central en sector veloz
+      { sampleIdx: 545, lane: 0.35,  type: 'cyan' }  // Rampa previa a recta final
+    ];
+
+    for (let i = 0; i < rampConfigs.length; i++) {
+      const cfg = rampConfigs[i];
+      const s = trackSamples[cfg.sampleIdx];
+      let lateral = cfg.lane * (HALF_WIDTH - 3.5);
+
+      let rx = s.x + s.normal.x * lateral;
+      let rz = s.z + s.normal.z * lateral;
+
+      // Garantizar que no coincida ni bloquee directamente ningún obstáculo
+      for (const obs of obstacles) {
+        const dx = rx - obs.x;
+        const dz = rz - obs.z;
+        if (dx * dx + dz * dz < 100) {
+          lateral = -lateral;
+          if (Math.abs(lateral) < 1.0) lateral = HALF_WIDTH * 0.45;
+          rx = s.x + s.normal.x * lateral;
+          rz = s.z + s.normal.z * lateral;
+          break;
+        }
+      }
+
+      const angle = Math.atan2(s.tan.z, s.tan.x);
+      const isCyan = cfg.type === 'cyan';
+      const mesh = createRampMesh(RAMP_WIDTH, RAMP_LENGTH, RAMP_HEIGHT, isCyan);
+      mesh.position.set(rx, 0, rz);
+      mesh.rotation.y = -angle + Math.PI / 2;
+      scene.add(mesh);
+
+      const lightColor = isCyan ? 0x00e5ff : 0xffaa00;
+      const light = new THREE.PointLight(lightColor, 1.6, 9);
+      light.position.set(rx, 1.2, rz);
+      scene.add(light);
+
+      ramps.push({
+        mesh,
+        light,
+        x: rx,
+        z: rz,
+        tanX: s.tan.x,
+        tanZ: s.tan.z,
+        normX: s.normal.x,
+        normZ: s.normal.z,
+        width: RAMP_WIDTH,
+        length: RAMP_LENGTH,
+        height: RAMP_HEIGHT,
+        angle,
+        recentlyLaunched: false
+      });
+    }
+  }
+  buildRamps();
+
+  function updateRamps(dt) {
+    const dirX = Math.cos(state.angle);
+    const dirZ = Math.sin(state.angle);
+
+    for (const ramp of ramps) {
+      const dx = state.posX - ramp.x;
+      const dz = state.posZ - ramp.z;
+      const distSq = dx * dx + dz * dz;
+
+      if (distSq > 150) {
+        ramp.recentlyLaunched = false;
+        continue;
+      }
+
+      // Proyección en ejes locales de la rampa
+      const longDist = dx * ramp.tanX + dz * ramp.tanZ; // -length/2 a +length/2
+      const latDist  = dx * ramp.normX + dz * ramp.normZ; // -width/2 a +width/2
+      const halfL = ramp.length / 2;
+      const halfW = ramp.width / 2;
+
+      // Comprobar si el kart está sobre la rampa
+      if (Math.abs(latDist) <= halfW && longDist >= -halfL && longDist <= halfL + 1.2) {
+        const progress = Math.min(1.0, Math.max(0.0, (longDist + halfL) / ramp.length));
+        const rampY = progress * ramp.height;
+
+        // Subiendo por la rampa
+        if (state.posY <= rampY + 0.8 && state.velY <= 0.08) {
+          state.posY = rampY;
+          state.isGrounded = true;
+          state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0.24, 0.3);
+        }
+
+        // Impulso y despegue en la cresta
+        const dot = dirX * ramp.tanX + dirZ * ramp.tanZ;
+        if (longDist >= halfL - 0.9 && !ramp.recentlyLaunched && state.speed > 0.05 && dot > 0.1) {
+          ramp.recentlyLaunched = true;
+          state.velY = 0.36 + Math.min(Math.abs(state.speed), MAX_SPEED) * 0.14;
+          state.isGrounded = false;
+          state.speed = Math.max(state.speed * 1.08, MAX_SPEED * 1.15); // Jump boost!
+          state.kartPitch = 0.32;
+
+          // Efectos de despegue con ráfaga neón
+          spawnPickupBurst(state.posX, state.posY + 0.4, state.posZ);
+          for (let k = 0; k < 14; k++) {
+            const spd = 0.05 + Math.random() * 0.08;
+            const a = state.angle + Math.PI + (Math.random() - 0.5) * 0.9;
+            spawnParticle(
+              state.posX, state.posY + 0.2, state.posZ,
+              Math.cos(a) * spd, 0.08 + Math.random() * 0.07, Math.sin(a) * spd,
+              1.0, 0.88, 0.1
+            );
+          }
+
+          if (hudItemFx) {
+            hudItemFx.classList.remove('hidden');
+            hudItemFx.textContent = '¡SUPER SALTO!';
+            hudItemFx.style.color = '#ffcc00';
+            void hudItemFx.offsetWidth;
+            hudItemFx.style.animation = 'none';
+            requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+          }
+        }
+      } else {
+        if (distSq > 25) {
+          ramp.recentlyLaunched = false;
+        }
+      }
+    }
+  }
 
   /* ──────────────────────────────────────────
      Power-ups (Verde: Misil, Rojo: Teledirigido, Amarillo: Turbo)
@@ -900,7 +1154,8 @@
     missiles: [], // Almacén de hasta 3 misiles
     missileCooldown: 0,
     spinOutTimer: 0,
-    invulnerableTimer: 0
+    invulnerableTimer: 0,
+    kartPitch: 0
   };
 
   const activeMissiles = [];
@@ -1095,6 +1350,18 @@
       minimapCtx.beginPath();
       minimapCtx.arc(ox, oz, 2.5, 0, Math.PI * 2);
       minimapCtx.fill();
+    }
+
+    // Rampas en minimapa (puntos luminosos dorados)
+    for (const ramp of ramps) {
+      const { mx: rx, my: rz } = worldToMinimap(ramp.x, ramp.z);
+      minimapCtx.fillStyle = '#ffbb00';
+      minimapCtx.shadowColor = 'rgba(255, 187, 0, 0.9)';
+      minimapCtx.shadowBlur = 4;
+      minimapCtx.beginPath();
+      minimapCtx.arc(rx, rz, 2.5, 0, Math.PI * 2);
+      minimapCtx.fill();
+      minimapCtx.shadowBlur = 0;
     }
 
     // Punto del jugador
@@ -1425,6 +1692,7 @@
     if (state.raceFinished) return; // congelar al terminar
     
     updateMissiles(dt);
+    updateRamps(dt);
 
     if (state.invulnerableTimer > 0) {
       state.invulnerableTimer -= dt;
@@ -1447,12 +1715,31 @@
       const dz = state.posZ - obs.z;
       const distSq = dx * dx + dz * dz;
       if (distSq < obs.radius * obs.radius) {
-        if (state.spinOutTimer <= 0 && state.invulnerableTimer <= 0) {
-          state.spinOutTimer = 1.5; // Gira durante 1.5 segundos
-          state.invulnerableTimer = 3.0; // 1.5s giro + 1.5s cooldown de inmunidad
-          state.speed *= 0.2;
-          spawnPickupBurst(obs.x, 1.0, obs.z);
+        const obsHeight = obs.height || 1.8;
+        if (state.posY < obsHeight) {
+          if (state.spinOutTimer <= 0 && state.invulnerableTimer <= 0) {
+            state.spinOutTimer = 1.5; // Gira durante 1.5 segundos
+            state.invulnerableTimer = 3.0; // 1.5s giro + 1.5s cooldown de inmunidad
+            state.speed *= 0.2;
+            spawnPickupBurst(obs.x, 1.0, obs.z);
+          }
+        } else {
+          // El kart sobrevoló exitosamente el obstáculo en el aire
+          if (!obs.clearedInAir) {
+            obs.clearedInAir = true;
+            spawnParticle(state.posX, state.posY, state.posZ, 0, 0.1, 0, 1, 0.9, 0.2);
+            if (hudItemFx) {
+              hudItemFx.classList.remove('hidden');
+              hudItemFx.textContent = '¡OBSTÁCULO SUPERADO!';
+              hudItemFx.style.color = '#00ffcc';
+              void hudItemFx.offsetWidth;
+              hudItemFx.style.animation = 'none';
+              requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+            }
+          }
         }
+      } else {
+        obs.clearedInAir = false;
       }
     }
 
@@ -1468,7 +1755,7 @@
       state.speed *= 0.9;
       state.posX += Math.cos(state.angle) * state.speed;
       state.posZ += Math.sin(state.angle) * state.speed;
-      resolveTrackCollision();
+      resolveTrackCollision(dt);
       updateRemoteKarts(dt);
       
       kartGroup.position.set(state.posX, state.posY, state.posZ);
@@ -1560,7 +1847,7 @@
       state.steerAngle *= 0.8;
     }
 
-    // ── Salto ──
+    // ── Salto Manual (Barra Espaciadora) ──
     if (state.jumpCooldown > 0) state.jumpCooldown -= dt;
     if (jumpKey && state.isGrounded && state.jumpCooldown <= 0 && !state.isDrifting) {
       state.velY = JUMP_VEL;
@@ -1601,15 +1888,27 @@
       spawnDriftSparks(state.driftPower);
     }
 
-    // ── Gravedad ──
+    // ── Gravedad y Dinámica Aérea ──
     if (!state.isGrounded) {
       state.velY += GRAVITY;
       state.posY += state.velY;
+
+      // Inclinación aérea suave (pitch)
+      if (state.velY > 0) {
+        state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0.18, 0.08);
+      } else {
+        state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, -0.1, 0.06);
+      }
+
       if (state.posY <= GROUND_Y) {
         state.posY = GROUND_Y;
         state.velY = 0;
         state.isGrounded = true;
+        state.kartPitch = 0;
+        spawnPickupBurst(state.posX, 0.2, state.posZ);
       }
+    } else {
+      state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0, 0.2);
     }
 
     // ── Movimiento ──
@@ -1620,9 +1919,10 @@
     updatePowerups(dt);
     updateRemoteKarts(dt);
 
-    // ── Kart mesh ──
+    // ── Transform del Kart ──
     kartGroup.position.set(state.posX, state.posY, state.posZ);
     kartGroup.rotation.y = -state.angle + Math.PI / 2;
+    kartGroup.rotation.x = state.kartPitch || 0;
 
     // Inclinación lateral en drift
     if (state.isDrifting) {
@@ -1807,8 +2107,12 @@
       state.invulnerableTimer = 0;
       state.raceTimerStarted = false;
       kartGroup.visible = true;
+      state.kartPitch = 0;
       updateMissileHUD();
       resetCheckpoints();
+      for (const ramp of ramps) {
+        ramp.recentlyLaunched = false;
+      }
       for (const obs of obstacles) {
         obs.active = true;
         obs.respawnTimer = 0;
