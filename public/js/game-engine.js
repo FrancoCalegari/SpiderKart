@@ -583,23 +583,42 @@
           state.isGrounded = false;
           state.speed = Math.max(state.speed * 1.08, MAX_SPEED * 1.15); // Jump boost!
           state.kartPitch = 0.32;
+          state.rampJumpBoost = true;
+
+          // Iniciar Acrobacia en el aire
+          state.stuntActive = true;
+          state.stuntProgress = 0;
+          state.stuntDuration = 0.95;
+          state.stuntRotX = 0;
+          state.stuntRotY = 0;
+          state.stuntRotZ = 0;
+
+          // Seleccionar estilo de acrobacia
+          const stuntTypes = [
+            { type: 'barrel_roll_left', label: '¡BARREL ROLL 360°! 🌪️', color: '#00e5ff' },
+            { type: 'barrel_roll_right', label: '¡BARREL ROLL 360°! 🌪️', color: '#00e5ff' },
+            { type: 'spin_360', label: '¡TORNADO SPIN 360°! 🌀', color: '#ffd700' },
+            { type: 'backflip', label: '¡BACKFLIP 360°! ⚡', color: '#ff3366' }
+          ];
+          const selectedStunt = stuntTypes[Math.floor(Math.random() * stuntTypes.length)];
+          state.stuntType = selectedStunt.type;
 
           // Efectos de despegue con ráfaga neón
           spawnPickupBurst(state.posX, state.posY + 0.4, state.posZ);
-          for (let k = 0; k < 14; k++) {
-            const spd = 0.05 + Math.random() * 0.08;
-            const a = state.angle + Math.PI + (Math.random() - 0.5) * 0.9;
+          for (let k = 0; k < 18; k++) {
+            const spd = 0.06 + Math.random() * 0.1;
+            const a = state.angle + Math.PI + (Math.random() - 0.5) * 1.2;
             spawnParticle(
               state.posX, state.posY + 0.2, state.posZ,
-              Math.cos(a) * spd, 0.08 + Math.random() * 0.07, Math.sin(a) * spd,
+              Math.cos(a) * spd, 0.08 + Math.random() * 0.09, Math.sin(a) * spd,
               1.0, 0.88, 0.1
             );
           }
 
           if (hudItemFx) {
             hudItemFx.classList.remove('hidden');
-            hudItemFx.textContent = '¡SUPER SALTO!';
-            hudItemFx.style.color = '#ffcc00';
+            hudItemFx.textContent = selectedStunt.label;
+            hudItemFx.style.color = selectedStunt.color;
             void hudItemFx.offsetWidth;
             hudItemFx.style.animation = 'none';
             requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
@@ -913,9 +932,9 @@
   }
 
   /* ──────────────────────────────────────────
-     Particles (exhaust smoke + drift sparks + pickup bursts)
+     Particles (exhaust smoke + drift sparks + pickup bursts + stunts)
   ────────────────────────────────────────── */
-  const PARTICLE_COUNT = 300;
+  const PARTICLE_COUNT = 500;
   const particleGeo = new THREE.BufferGeometry();
   const pPositions = new Float32Array(PARTICLE_COUNT * 3);
   const pColors    = new Float32Array(PARTICLE_COUNT * 3);
@@ -988,6 +1007,61 @@
         0.03 + Math.random() * 0.05,
         Math.sin(a) * spd,
         r, g, b
+      );
+    }
+  }
+
+  // Estela de chispas luminosas durante la acrobacia aérea
+  function spawnStuntTrail(x, y, z, progress) {
+    const colors = [
+      { r: 0.0, g: 0.9, b: 1.0 }, // Cyan
+      { r: 1.0, g: 0.85, b: 0.0 }, // Gold
+      { r: 1.0, g: 0.2, b: 0.8 }, // Magenta
+      { r: 0.3, g: 1.0, b: 0.5 }  // Neon green
+    ];
+    for (let i = 0; i < 4; i++) {
+      const c = colors[Math.floor(Math.random() * colors.length)];
+      const spread = 0.8;
+      spawnParticle(
+        x + (Math.random() - 0.5) * spread,
+        y + (Math.random() - 0.5) * spread,
+        z + (Math.random() - 0.5) * spread,
+        (Math.random() - 0.5) * 0.04,
+        (Math.random() - 0.5) * 0.04,
+        (Math.random() - 0.5) * 0.04,
+        c.r, c.g, c.b
+      );
+    }
+  }
+
+  // Onda expansiva de chispas y humo al aterrizar con mini turbo
+  function spawnLandingShockwave(x, z) {
+    const count = 28;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      const speed = 0.09 + Math.random() * 0.07;
+      const isGold = Math.random() > 0.3;
+      spawnParticle(
+        x + Math.cos(angle) * 0.5,
+        0.15 + Math.random() * 0.15,
+        z + Math.sin(angle) * 0.5,
+        Math.cos(angle) * speed,
+        0.04 + Math.random() * 0.05,
+        Math.sin(angle) * speed,
+        1.0,
+        isGold ? 0.75 : 0.2,
+        isGold ? 0.1 : 0.9
+      );
+    }
+    for (let k = 0; k < 14; k++) {
+      spawnParticle(
+        x + (Math.random() - 0.5) * 1.2,
+        0.2 + Math.random() * 0.3,
+        z + (Math.random() - 0.5) * 1.2,
+        (Math.random() - 0.5) * 0.06,
+        0.08 + Math.random() * 0.08,
+        (Math.random() - 0.5) * 0.06,
+        1.0, 0.9, 0.2
       );
     }
   }
@@ -1142,6 +1216,15 @@
     driftDir: 0,        // dirección fijada al iniciar el derrape: -1 izq, +1 der
     driftBoostPending: 0, // mini-turbo acumulado al soltar el drift
     wasJumpingAndTurning: false,
+    // Acrobacia aérea & Mini-turbo tras rampa
+    stuntActive: false,
+    stuntType: null,
+    stuntProgress: 0,
+    stuntDuration: 0.95,
+    stuntRotX: 0,
+    stuntRotY: 0,
+    stuntRotZ: 0,
+    rampJumpBoost: false,
     // Tiempo — raceStartTime se actualiza al primer movimiento real
     raceStartTime: performance.now(),
     lapStartTime:  performance.now(),
@@ -1893,19 +1976,74 @@
       state.velY += GRAVITY;
       state.posY += state.velY;
 
-      // Inclinación aérea suave (pitch)
-      if (state.velY > 0) {
-        state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0.18, 0.08);
-      } else {
-        state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, -0.1, 0.06);
+      // Actualizar acrobacia aérea si está activa
+      if (state.stuntActive) {
+        state.stuntProgress = Math.min(1.0, state.stuntProgress + dt / state.stuntDuration);
+        const t = THREE.MathUtils.smoothstep(state.stuntProgress, 0, 1);
+        
+        if (state.stuntType === 'spin_360') {
+          state.stuntRotY = t * Math.PI * 2;
+          state.stuntRotZ = Math.sin(t * Math.PI) * 0.22;
+        } else if (state.stuntType === 'barrel_roll_left') {
+          state.stuntRotZ = -t * Math.PI * 2;
+        } else if (state.stuntType === 'barrel_roll_right') {
+          state.stuntRotZ = t * Math.PI * 2;
+        } else if (state.stuntType === 'backflip') {
+          state.stuntRotX = -t * Math.PI * 2;
+          state.stuntRotZ = Math.sin(t * Math.PI) * 0.15;
+        }
+
+        // Estela de chispas y estrellas de la acrobacia en el aire
+        spawnStuntTrail(state.posX, state.posY, state.posZ, state.stuntProgress);
       }
 
+      // Inclinación aérea suave (pitch) base si no hay backflip
+      if (!state.stuntActive || state.stuntType !== 'backflip') {
+        if (state.velY > 0) {
+          state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0.18, 0.08);
+        } else {
+          state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, -0.1, 0.06);
+        }
+      }
+
+      // Aterrizaje en el suelo
       if (state.posY <= GROUND_Y) {
         state.posY = GROUND_Y;
         state.velY = 0;
         state.isGrounded = true;
         state.kartPitch = 0;
-        spawnPickupBurst(state.posX, 0.2, state.posZ);
+
+        // Si venía de una rampa / acrobacia: ¡Activar Mini Turbo de aterrizaje!
+        if (state.stuntActive || state.rampJumpBoost) {
+          state.speed = Math.max(state.speed * 1.25, MAX_SPEED * 1.35);
+          state.powerTimer = Math.max(state.powerTimer, 1.4); // Mini Turbo activo
+          state.boost = BOOST_MULT;
+          state.powerActive = true;
+          flames.forEach(f => {
+            f.visible = true;
+            f.scale.setScalar(1.5);
+          });
+          spawnLandingShockwave(state.posX, state.posZ);
+          
+          if (hudItemFx) {
+            hudItemFx.classList.remove('hidden');
+            hudItemFx.textContent = '¡MINI TURBO POR ATERRIZAJE! 🚀💨';
+            hudItemFx.style.color = '#ffcc00';
+            void hudItemFx.offsetWidth;
+            hudItemFx.style.animation = 'none';
+            requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
+          }
+        } else {
+          spawnPickupBurst(state.posX, 0.2, state.posZ);
+        }
+
+        // Reset de acrobacia
+        state.stuntActive = false;
+        state.rampJumpBoost = false;
+        state.stuntProgress = 0;
+        state.stuntRotX = 0;
+        state.stuntRotY = 0;
+        state.stuntRotZ = 0;
       }
     } else {
       state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0, 0.2);
@@ -1921,15 +2059,15 @@
 
     // ── Transform del Kart ──
     kartGroup.position.set(state.posX, state.posY, state.posZ);
-    kartGroup.rotation.y = -state.angle + Math.PI / 2;
-    kartGroup.rotation.x = state.kartPitch || 0;
+    kartGroup.rotation.y = -state.angle + Math.PI / 2 + (state.stuntRotY || 0);
+    kartGroup.rotation.x = (state.kartPitch || 0) + (state.stuntRotX || 0);
 
-    // Inclinación lateral en drift
+    // Inclinación lateral en drift o acrobacia
     if (state.isDrifting) {
       const tiltDir = left ? -1 : right ? 1 : 0;
-      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, tiltDir * 0.18, 0.15);
+      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, tiltDir * 0.18, 0.15) + (state.stuntRotZ || 0);
     } else {
-      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, 0, 0.1);
+      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, 0, 0.1) + (state.stuntRotZ || 0);
     }
 
     // ── Ruedas ──
@@ -2108,6 +2246,12 @@
       state.raceTimerStarted = false;
       kartGroup.visible = true;
       state.kartPitch = 0;
+      state.stuntActive = false;
+      state.rampJumpBoost = false;
+      state.stuntProgress = 0;
+      state.stuntRotX = 0;
+      state.stuntRotY = 0;
+      state.stuntRotZ = 0;
       updateMissileHUD();
       resetCheckpoints();
       for (const ramp of ramps) {
@@ -2152,6 +2296,12 @@
       state.spinOutTimer = 0;
       state.invulnerableTimer = 0;
       state.wrongWayTimer = 0;
+      state.stuntActive = false;
+      state.rampJumpBoost = false;
+      state.stuntProgress = 0;
+      state.stuntRotX = 0;
+      state.stuntRotY = 0;
+      state.stuntRotZ = 0;
       kartGroup.visible = true;
       state.missiles = [];
       updateMissileHUD();
@@ -2179,6 +2329,12 @@
         state.powerActive = false;
         state.powerTimer = 0;
         state.boost = 1;
+        state.stuntActive = false;
+        state.rampJumpBoost = false;
+        state.stuntProgress = 0;
+        state.stuntRotX = 0;
+        state.stuntRotY = 0;
+        state.stuntRotZ = 0;
       }
     },
     trackHalfWidth: HALF_WIDTH,
