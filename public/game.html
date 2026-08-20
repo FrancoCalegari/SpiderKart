@@ -114,7 +114,7 @@
       transition: width 0.15s linear;
     }
 
-    /* Power bar */
+    /* Power bar — sube un poco más */
     .sk-hud-power {
       position: absolute; bottom: 24px; right: 24px;
       display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
@@ -166,9 +166,9 @@
       color: rgba(255,255,255,0.2);
     }
 
-    /* Missile inventory HUD (3 slots) */
+    /* Missile inventory HUD (3 slots) — movido a bottom-right con más espacio */
     .sk-hud-missiles {
-      position: absolute; bottom: 70px; right: 24px;
+      position: absolute; bottom: 120px; right: 24px;
       display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
     }
     .sk-hud-missiles-label {
@@ -342,8 +342,7 @@
 
     /* Minimapa */
     #hud-minimap {
-      position: absolute; bottom: 24px; left: 50%;
-      transform: translateX(-50%);
+      position: absolute; top: 10px; left: 10px;
       width: 140px; height: 140px;
       background: rgba(0,0,0,0.65);
       border: 1px solid rgba(163,0,0,0.4);
@@ -408,6 +407,30 @@
       text-decoration: none;
     }
     #btn-back-portal:hover { color: #fff; border-color: rgba(163,0,0,0.6); }
+
+    /* Estilos Responsivos (Móviles) */
+    @media (max-width: 768px) {
+      .mm-logo { font-size: 3.5rem !important; margin-bottom: 25px !important; }
+      .mm-btn { padding: 12px 16px !important; font-size: 1.1rem !important; }
+      #mm-buttons { gap: 15px !important; width: 280px !important; }
+      #mp-lobby { padding: 15px !important; }
+      #mp-lobby h2 { font-size: 1.2rem !important; }
+      
+      /* HUD in-game reducido */
+      .sk-hud-lap, .sk-hud-timer { font-size: 1.3rem; }
+      .sk-hud-lap-split, .sk-hud-best { font-size: 0.65rem; }
+      .sk-hud-val { font-size: 2rem; }
+      #minimap-canvas { width: 100px; height: 100px; }
+      .sk-hud-power { bottom: 12px; right: 12px; }
+      .sk-hud-bar { width: 100px; height: 6px; }
+      .sk-hud-missiles { bottom: 12px; left: 12px; }
+      .sk-hud-controls { display: none; /* Ocultar textos de teclado */ }
+      #hud-action-bar { transform: scale(0.8); transform-origin: top left; top: 8px; left: 8px; }
+      
+      /* Botón full screen visible */
+      #btn-fullscreen-mobile { display: flex !important; }
+    }
+
   </style>
 </head>
 <body>
@@ -422,11 +445,138 @@
   <!-- Botón de regreso al portal -->
   <a href="/" id="btn-back-portal"><i class="fa-solid fa-arrow-left"></i> PORTAL</a>
 
+  <!-- Menú Principal -->
+  <div id="main-menu" style="display:none; position:fixed; inset:0; z-index:180; background:radial-gradient(circle at center, rgba(30,10,10,0.8) 0%, rgba(10,5,10,0.95) 100%); align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(8px);">
+    <!-- Grid Animado de Fondo -->
+    <div style="position:absolute; inset:0; z-index:-1; overflow:hidden; opacity:0.3; pointer-events:none;">
+      <div style="width:200%; height:200%; position:absolute; bottom:-50%; left:-50%; background-image: linear-gradient(rgba(163,0,0,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(163,0,0,0.2) 1px, transparent 1px); background-size: 50px 50px; transform: perspective(500px) rotateX(60deg); animation: moveGrid 5s linear infinite;"></div>
+    </div>
+    <style>
+      @keyframes moveGrid { from { transform: perspective(500px) rotateX(60deg) translateY(0); } to { transform: perspective(500px) rotateX(60deg) translateY(50px); } }
+      .mm-btn { background:rgba(10,10,18,0.7); border:1px solid rgba(163,0,0,0.4); color:#fff; padding:18px 24px; font-size:1.3rem; font-family:'Share Tech Mono', monospace; cursor:pointer; transition:all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); text-transform:uppercase; letter-spacing:3px; position:relative; overflow:hidden; box-shadow:0 0 10px rgba(0,0,0,0.5); border-radius:4px; }
+      .mm-btn::before { content:''; position:absolute; top:0; left:-100%; width:100%; height:100%; background:linear-gradient(90deg, transparent, rgba(163,0,0,0.4), transparent); transition:left 0.5s; }
+      .mm-btn:hover { background:rgba(163,0,0,0.8); border-color:#ff3333; box-shadow:0 0 20px rgba(163,0,0,0.6); transform:scale(1.05); }
+      .mm-btn:hover::before { left:100%; }
+      .mm-btn i { margin-right:10px; color:#ff6666; transition:color 0.3s; }
+      .mm-btn:hover i { color:#fff; }
+      .mm-logo { color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:5.5rem; margin-bottom:50px; letter-spacing:4px; text-shadow:0 0 30px rgba(163,0,0,0.9), 0 0 10px rgba(255,255,255,0.2); animation: logoPulse 2s infinite alternate; }
+      @keyframes logoPulse { from { text-shadow:0 0 20px rgba(163,0,0,0.6); } to { text-shadow:0 0 40px rgba(255,51,51,0.9); } }
+    </style>
+
+    <h1 class="mm-logo">SPIDER<span style="color:#ff3333;">KART</span></h1>
+    
+    <div id="mm-buttons" style="display:flex; flex-direction:column; gap:25px; width:340px;">
+      <button id="btn-best-lap" class="mm-btn"><i class="fa-solid fa-stopwatch"></i> MEJOR VUELTA</button>
+      <button id="btn-split-screen" class="mm-btn" onclick="location.href='/split.html'"><i class="fa-solid fa-users"></i> PANTALLA DIVIDIDA</button>
+      <button id="btn-multiplayer" class="mm-btn"><i class="fa-solid fa-globe"></i> MULTIJUGADOR</button>
+      <button id="btn-settings" class="mm-btn"><i class="fa-solid fa-gear"></i> AJUSTES</button>
+    </div>
+
+    <!-- Lobby Multijugador -->
+    <div id="mp-lobby" style="display:none; width:500px; max-width:90%; border:1px solid rgba(163,0,0,0.5); background:rgba(0,0,0,0.5); padding:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <h2 style="color:#a30000; font-family:'Barlow Condensed',sans-serif; font-size:1.5rem; margin:0;">SALAS ACTIVAS</h2>
+        <button id="btn-refresh-rooms" style="background:none; border:none; color:rgba(255,255,255,0.5); cursor:pointer; font-size:1.2rem;"><i class="fa-solid fa-rotate-right"></i></button>
+      </div>
+      <div id="rooms-list" style="max-height:200px; overflow-y:auto; margin-bottom:20px; display:flex; flex-direction:column; gap:10px;">
+        <!-- Rooms here -->
+      </div>
+      <div style="display:flex; gap:10px;">
+        <input type="text" id="new-room-name" placeholder="Nombre de sala" maxlength="12" style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; font-family:inherit; outline:none;">
+        <button id="btn-create-room" style="background:#a30000; border:none; color:#fff; padding:10px 20px; font-family:inherit; cursor:pointer; font-weight:bold;">CREAR</button>
+      </div>
+      <button id="btn-back-mm" style="background:none; border:none; color:rgba(255,255,255,0.5); font-size:0.8rem; font-family:inherit; margin-top:20px; cursor:pointer;"><i class="fa-solid fa-arrow-left"></i> VOLVER AL MENÚ</button>
+    </div>
+  </div>
+  <a href="/" id="btn-back-portal"><i class="fa-solid fa-arrow-left"></i> PORTAL</a>
+
+  <!-- Modal Ajustes -->
+  <div id="settings-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.85); align-items:center; justify-content:center; backdrop-filter:blur(5px); flex-direction:column;">
+    <div style="background:rgba(10,10,18,0.95); border:1px solid rgba(163,0,0,0.5); padding:30px; border-radius:6px; width:320px; box-shadow:0 0 30px rgba(163,0,0,0.3); text-align:center;">
+      <h2 style="color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:2rem; margin-bottom:20px; letter-spacing:1px; text-transform:uppercase;">AJUSTES</h2>
+      
+      <div style="display:flex; flex-direction:column; gap:15px; text-align:left;">
+        <div>
+          <label style="color:#a30000; font-size:0.7rem; font-weight:bold; display:block; margin-bottom:5px;">RESOLUCIÓN</label>
+          <select id="setting-resolution" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:8px; font-family:inherit; outline:none; border-radius:3px;">
+            <option value="1">100% (Normal)</option>
+            <option value="0.75">75% (Optimizada)</option>
+            <option value="0.5">50% (Rápida)</option>
+          </select>
+        </div>
+        <div>
+          <label style="color:#a30000; font-size:0.7rem; font-weight:bold; display:block; margin-bottom:5px;">CALIDAD GRÁFICA</label>
+          <select id="setting-graphics" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:8px; font-family:inherit; outline:none; border-radius:3px;">
+            <option value="high">Alta (Sombras + Antialias)</option>
+            <option value="low">Baja (Sin sombras)</option>
+          </select>
+        </div>
+      </div>
+      
+      <div style="display:flex; gap:10px; margin-top:25px;">
+        <button id="btn-close-settings" style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; cursor:pointer; font-family:inherit;">CANCELAR</button>
+        <button id="btn-save-settings" style="flex:1; background:#a30000; border:none; color:#fff; padding:10px; cursor:pointer; font-family:inherit; font-weight:bold;">APLICAR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Registro Rápido -->
+  <div id="quick-register-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.85); align-items:center; justify-content:center; backdrop-filter:blur(5px); flex-direction:column;">
+    <div style="background:rgba(10,10,18,0.95); border:1px solid rgba(163,0,0,0.5); padding:30px; border-radius:6px; width:320px; box-shadow:0 0 30px rgba(163,0,0,0.3); text-align:center;">
+      <h2 style="color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:2rem; margin-bottom:5px; letter-spacing:1px; text-transform:uppercase;">IDENTIFICACIÓN</h2>
+      <p style="color:rgba(255,255,255,0.5); font-size:0.7rem; margin-bottom:20px; letter-spacing:0.05em;">CREA TU CUENTA PARA GUARDAR PROGRESO</p>
+      
+      <form id="quick-register-form" style="display:flex; flex-direction:column; gap:12px; text-align:left;">
+        <div>
+          <label style="color:#a30000; font-size:0.65rem; font-weight:bold; letter-spacing:0.1em; display:block; margin-bottom:4px;">// USUARIO</label>
+          <input type="text" id="quick-username" required placeholder="Alias de piloto" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; font-family:inherit; outline:none; border-radius:3px;">
+        </div>
+        <div>
+          <label style="color:#a30000; font-size:0.65rem; font-weight:bold; letter-spacing:0.1em; display:block; margin-bottom:4px;">// CORREO</label>
+          <input type="email" id="quick-email" required placeholder="tu@correo.com" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; font-family:inherit; outline:none; border-radius:3px;">
+        </div>
+        <div id="quick-alert" style="color:#ff3333; font-size:0.65rem; display:none; margin-top:4px;"></div>
+        <button type="submit" id="quick-submit-btn" style="background:#a30000; color:#fff; border:1px solid #c40000; padding:12px; font-family:inherit; font-weight:bold; letter-spacing:0.1em; cursor:pointer; margin-top:10px; border-radius:3px; transition:0.2s;">
+          COMENZAR
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- Canvas del juego -->
   <div id="game-canvas-container"></div>
 
+  <!-- Controles Táctiles (ocultos por defecto) -->
+  <div id="touch-controls" style="display:none; position:fixed; inset:0; z-index:150; pointer-events:none;">
+    <!-- Controles Izquierdos (Dirección) -->
+    <div style="position:absolute; bottom:20px; left:20px; display:flex; gap:10px; pointer-events:auto;">
+      <button id="tc-left" style="width:60px; height:60px; border-radius:50%; background:rgba(255,255,255,0.1); border:2px solid rgba(255,255,255,0.3); color:#fff; font-size:1.5rem; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none;"><i class="fa-solid fa-arrow-left"></i></button>
+      <button id="tc-right" style="width:60px; height:60px; border-radius:50%; background:rgba(255,255,255,0.1); border:2px solid rgba(255,255,255,0.3); color:#fff; font-size:1.5rem; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none;"><i class="fa-solid fa-arrow-right"></i></button>
+    </div>
+    <!-- Controles Derechos (Acción) -->
+    <div style="position:absolute; bottom:20px; right:20px; display:flex; gap:10px; align-items:flex-end; pointer-events:auto;">
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <button id="tc-power" style="width:50px; height:50px; border-radius:50%; background:rgba(255,204,0,0.2); border:2px solid rgba(255,204,0,0.5); color:#fc0; font-size:1.2rem; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none;"><i class="fa-solid fa-bolt"></i></button>
+        <button id="tc-brake" style="width:60px; height:60px; border-radius:50%; background:rgba(255,0,0,0.2); border:2px solid rgba(255,0,0,0.5); color:#f33; font-size:1.5rem; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none;"><i class="fa-solid fa-arrow-down"></i></button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px; align-items:center;">
+        <button id="tc-jump" style="width:50px; height:50px; border-radius:50%; background:rgba(0,212,255,0.2); border:2px solid rgba(0,212,255,0.5); color:#00d4ff; font-size:1.2rem; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none;"><i class="fa-solid fa-arrow-up"></i></button>
+        <button id="tc-accel" style="width:80px; height:80px; border-radius:50%; background:rgba(57,209,125,0.2); border:2px solid rgba(57,209,125,0.5); color:#39d17d; font-size:2rem; display:flex; align-items:center; justify-content:center; user-select:none; -webkit-user-select:none; touch-action:none;"><i class="fa-solid fa-angles-up"></i></button>
+      </div>
+    </div>
+  </div>
+
   <!-- HUD -->
   <div id="sk-hud">
+    <!-- Contenedor para indicadores de jugadores -->
+    <div id="hud-player-markers" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; overflow: hidden;"></div>
+    <!-- Barra de botones de control superior izquierda -->
+    <div id="hud-action-bar" style="position:absolute; top:16px; left:16px; display:flex; gap:8px; z-index:190; pointer-events:auto;">
+      <button id="btn-exit-race" style="background:rgba(10,10,18,0.75); border:1px solid rgba(163,0,0,0.7); color:#fff; font-family:'Share Tech Mono',monospace; font-size:0.75rem; padding:7px 14px; cursor:pointer; border-radius:4px; backdrop-filter:blur(4px); transition:background 0.2s;" onmouseover="this.style.background='rgba(163,0,0,0.6)'" onmouseout="this.style.background='rgba(10,10,18,0.75)'"><i class="fa-solid fa-bars"></i> MENÚ</button>
+      <a href="/" style="background:rgba(10,10,18,0.75); border:1px solid rgba(255,255,255,0.15); color:#aaa; font-family:'Share Tech Mono',monospace; font-size:0.75rem; padding:7px 14px; cursor:pointer; border-radius:4px; backdrop-filter:blur(4px); text-decoration:none; display:flex; align-items:center; gap:6px; transition:background 0.2s;" onmouseover="this.style.background='rgba(60,60,80,0.7)'" onmouseout="this.style.background='rgba(10,10,18,0.75)'"><i class="fa-solid fa-house"></i> PORTAL</a>
+      <button id="btn-fullscreen" onclick="toggleFullscreen()" style="background:rgba(10,10,18,0.75); border:1px solid rgba(255,255,255,0.15); color:#aaa; font-family:'Share Tech Mono',monospace; font-size:0.75rem; padding:7px 12px; cursor:pointer; border-radius:4px; backdrop-filter:blur(4px); transition:background 0.2s;" onmouseover="this.style.background='rgba(60,60,80,0.7)'" onmouseout="this.style.background='rgba(10,10,18,0.75)'"><i class="fa-solid fa-expand" id="fs-icon"></i></button>
+    </div>
+
 
     <!-- TOP-CENTER: Barra de progreso de vuelta -->
     <div class="sk-hud-progress">
@@ -534,12 +684,80 @@
       if (lsBar) lsBar.style.width = '100%';
       setTimeout(() => {
         if (lsScreen) { lsScreen.style.transition = 'opacity 0.5s'; lsScreen.style.opacity = '0'; }
-        setTimeout(() => { if (lsScreen) lsScreen.style.display = 'none'; }, 500);
+        setTimeout(() => { 
+            if (lsScreen) lsScreen.style.display = 'none'; 
+            const mm = document.getElementById('main-menu');
+            if (mm && (!window.sessionStorage.getItem('sk_hide_menu'))) {
+                mm.style.display = 'flex';
+            }
+        }, 500);
       }, 300);
     };
+
+    // --- LÓGICA DE AJUSTES ---
+    const btnSettings = document.getElementById('btn-settings');
+    const settingsModal = document.getElementById('settings-modal');
+    const btnCloseSettings = document.getElementById('btn-close-settings');
+    const btnSaveSettings = document.getElementById('btn-save-settings');
+    const selResolution = document.getElementById('setting-resolution');
+    const selGraphics = document.getElementById('setting-graphics');
+
+    // Cargar ajustes guardados o defaults
+    const savedSettings = JSON.parse(localStorage.getItem('sk_settings') || '{"resolution":"1","graphics":"high"}');
+    if(selResolution) selResolution.value = savedSettings.resolution;
+    if(selGraphics) selGraphics.value = savedSettings.graphics;
+    
+    // Aplicar a global para que game-engine.js lo lea (en caso de que engine cargue después)
+    window._skSettings = savedSettings;
+
+    if(btnSettings) {
+      btnSettings.addEventListener('click', () => {
+        settingsModal.style.display = 'flex';
+      });
+    }
+    if(btnCloseSettings) {
+      btnCloseSettings.addEventListener('click', () => {
+        settingsModal.style.display = 'none';
+        // Revertir a lo guardado
+        selResolution.value = window._skSettings.resolution;
+        selGraphics.value = window._skSettings.graphics;
+      });
+    }
+    if(btnSaveSettings) {
+      btnSaveSettings.addEventListener('click', () => {
+        const res = selResolution.value;
+        const gfx = selGraphics.value;
+        const newSettings = { resolution: res, graphics: gfx };
+        localStorage.setItem('sk_settings', JSON.stringify(newSettings));
+        window._skSettings = newSettings;
+        settingsModal.style.display = 'none';
+        
+        // Disparar evento para que game-engine aplique cambios en caliente
+        window.dispatchEvent(new CustomEvent('sk_settings_changed', { detail: newSettings }));
+      });
+    }
+
+    // Pantalla completa
+    function toggleFullscreen() {
+      const icon = document.getElementById('fs-icon');
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+        if (icon) { icon.className = 'fa-solid fa-compress'; }
+      } else {
+        document.exitFullscreen().catch(() => {});
+        if (icon) { icon.className = 'fa-solid fa-expand'; }
+      }
+    }
+    document.addEventListener('fullscreenchange', () => {
+      const icon = document.getElementById('fs-icon');
+      if (icon) {
+        icon.className = document.fullscreenElement ? 'fa-solid fa-compress' : 'fa-solid fa-expand';
+      }
+    });
   </script>
 
   <!-- Motor de juego -->
+  <script src="/socket.io/socket.io.js"></script>
   <script src="js/game-engine.js"></script>
   <script src="js/multiplayer.js"></script>
 </body>

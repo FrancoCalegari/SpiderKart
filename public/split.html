@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>SpiderKart — Pantalla Dividida</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#000;color:#fff;font-family:'Share Tech Mono',monospace;overflow:hidden;height:100vh}
+    /* ── Setup ── */
+    #setup{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 40%,#1a0000,#000);z-index:100;gap:0}
+    #setup h1{font-family:'Barlow Condensed',sans-serif;font-size:3rem;color:#a30000;text-shadow:0 0 20px #f00;margin-bottom:6px}
+    .sub{font-size:.7rem;letter-spacing:.25em;color:rgba(255,255,255,.35);margin-bottom:32px}
+    .btn-row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:10px}
+    .btn{background:rgba(163,0,0,.2);border:1px solid #a30000;color:#fff;padding:13px 26px;font-family:inherit;font-size:1.05rem;cursor:pointer;transition:all .25s;border-radius:3px}
+    .btn:hover{background:#a30000;box-shadow:0 0 18px #f00}
+    .btn-sm{padding:8px 18px;font-size:.8rem}
+    .btn-ghost{background:transparent;border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.5)}
+    .btn-ghost:hover{background:rgba(255,255,255,.07);box-shadow:none}
+    .btn-green{border-color:rgba(0,255,102,.5);color:#0f6}
+    .btn-green:hover{background:rgba(0,255,102,.15);box-shadow:0 0 12px rgba(0,255,102,.4)}
+
+    /* ── Gamepad panel ── */
+    #gp-panel{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);padding:14px 18px;border-radius:4px;margin:18px 0;width:420px;max-width:92vw}
+    #gp-panel h3{font-size:.65rem;letter-spacing:.2em;color:rgba(255,255,255,.4);margin-bottom:10px}
+    .gp-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:.72rem}
+    .gp-row label{color:#aaa;min-width:90px}
+    .gp-row select{background:#0d0d1a;border:1px solid rgba(255,255,255,.15);color:#fff;padding:4px 8px;font-family:inherit;font-size:.7rem;border-radius:3px;flex:1}
+    .gp-row .gp-id{color:rgba(255,255,255,.25);font-size:.6rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:120px}
+    .hint{font-size:.62rem;color:rgba(255,255,255,.28);letter-spacing:.08em;line-height:2;margin-top:14px}
+    .hint span{color:rgba(255,255,255,.6)}
+
+    /* ── Grid ── */
+    #grid{position:fixed;inset:0;display:none;gap:2px;background:#a30000}
+    .grid-2{display:grid!important;grid-template-columns:1fr 1fr}
+    .grid-3{display:grid!important;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+    .grid-3 .cell:first-child{grid-column:1/-1}
+    .grid-4{display:grid!important;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+    .cell{position:relative;overflow:hidden}
+    iframe{width:100%;height:100%;border:none;background:#000;display:block}
+    .plabel{position:absolute;top:58px;left:8px;background:rgba(163,0,0,.75);color:#fff;font-size:.58rem;letter-spacing:.14em;padding:2px 8px;border-radius:2px;pointer-events:none;z-index:5}
+
+    /* ── Outer HUD ── */
+    #outer-hud{position:fixed;top:0;left:0;right:0;display:none;align-items:center;gap:8px;padding:8px 14px;background:linear-gradient(to bottom,rgba(0,0,0,.75),transparent);z-index:50}
+    #hud-room{font-size:.6rem;color:rgba(255,255,255,.35);letter-spacing:.12em;margin-left:auto}
+
+    /* ── Online modal ── */
+    #online-modal{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;z-index:200}
+    .mbox{background:#0d0d1a;border:1px solid rgba(163,0,0,.5);padding:28px;width:440px;max-width:93vw}
+    .mbox h2{font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;color:#a30000;margin-bottom:18px}
+    .ritem{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:3px;margin-bottom:7px;font-size:.78rem}
+  </style>
+</head>
+<body>
+
+<!-- ══════════════ SETUP ══════════════ -->
+<div id="setup">
+  <h1>PANTALLA DIVIDIDA</h1>
+  <p class="sub">SELECCIONA CUÁNTOS JUGADORES</p>
+  <div class="btn-row">
+    <button class="btn" onclick="startSplit(2)"><i class="fa-solid fa-users"></i> 2 JUGADORES</button>
+    <button class="btn" onclick="startSplit(3)">3 JUGADORES</button>
+    <button class="btn" onclick="startSplit(4)">4 JUGADORES</button>
+  </div>
+
+  <div id="gp-panel">
+    <h3><i class="fa-solid fa-gamepad"></i> CONTROLES DETECTADOS</h3>
+    <div id="gp-rows"><div style="font-size:.7rem;color:rgba(255,255,255,.3);">Conecta mandos y aparecerán aquí…</div></div>
+  </div>
+
+  <div class="hint">
+    <span>P1:</span> WASD · E misil · X turbo · ESPACIO derrape<br>
+    <span>P2 teclado:</span> Flechas · . misil · , turbo<br>
+    <span>P2–P4 mando:</span> Asigna arriba con el selector
+  </div>
+
+  <div class="btn-row" style="margin-top:20px">
+    <button class="btn btn-ghost btn-sm" onclick="location.href='/'">← VOLVER</button>
+  </div>
+</div>
+
+<!-- ══════════════ GRID ══════════════ -->
+<div id="grid"></div>
+
+<!-- ══════════════ OUTER HUD ══════════════ -->
+<div id="outer-hud">
+  <button class="btn btn-sm btn-ghost" onclick="location.href='/'"><i class="fa-solid fa-house"></i> PORTAL</button>
+  <button class="btn btn-sm btn-ghost" onclick="backToSetup()"><i class="fa-solid fa-bars"></i> MENÚ</button>
+  <button class="btn btn-sm btn-green" onclick="openOnline()"><i class="fa-solid fa-globe"></i> ONLINE</button>
+  <span id="hud-room"></span>
+</div>
+
+<!-- ══════════════ ONLINE MODAL ══════════════ -->
+<div id="online-modal">
+  <div class="mbox">
+    <h2>SALAS EN LÍNEA</h2>
+    <div id="modal-rooms"></div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-sm btn-ghost" onclick="closeOnline()">CANCELAR</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════
+// State
+// ══════════════════════════════════════════════════
+let numPlayers = 0;
+let iframes = [];
+let splitRoom = '';
+let baseName = 'Local';
+
+// gpAssignment: gpIndex → playerIndex (0-based)
+const gpAssignment = {};
+
+try {
+  const s = JSON.parse(localStorage.getItem('sk_session'));
+  if (s?.name) baseName = s.name;
+} catch(_) {}
+
+// ══════════════════════════════════════════════════
+// Keyboard routing — captured here, forwarded via postMessage
+// P1: WASD · Space=jump · E=missile · X=power
+// P2: Arrows · Comma=power · Period=missile
+// ══════════════════════════════════════════════════
+const KEY_MAP = {
+  KeyW:{ p:0, a:'forward'  }, KeyS:{ p:0, a:'backward' },
+  KeyA:{ p:0, a:'left'     }, KeyD:{ p:0, a:'right'    },
+  Space:{ p:0, a:'jump'    }, KeyE:{ p:0, a:'missile'  },
+  KeyX:{ p:0, a:'power'    },
+  ArrowUp:{ p:1, a:'forward'  }, ArrowDown:{ p:1, a:'backward' },
+  ArrowLeft:{ p:1, a:'left'   }, ArrowRight:{ p:1, a:'right'   },
+  Comma:{ p:1, a:'power'   }, Period:{ p:1, a:'missile' },
+};
+
+const inputs = Array.from({length:4}, () =>
+  ({ forward:false, backward:false, left:false, right:false, jump:false, power:false, missile:false })
+);
+
+window.addEventListener('keydown', e => {
+  const m = KEY_MAP[e.code];
+  if (m && m.p < numPlayers) { e.preventDefault(); inputs[m.p][m.a] = true; }
+});
+window.addEventListener('keyup', e => {
+  const m = KEY_MAP[e.code];
+  if (m) inputs[m.p][m.a] = false;
+});
+
+// ══════════════════════════════════════════════════
+// Gamepad polling
+// ══════════════════════════════════════════════════
+function readGp(gp) {
+  if (!gp) return null;
+  return {
+    forward:  !!(gp.buttons[0]?.pressed || gp.buttons[7]?.pressed || gp.axes[1] < -0.3),
+    backward: !!(gp.buttons[1]?.pressed || gp.buttons[6]?.pressed || gp.axes[1] >  0.3),
+    left:     !!(gp.axes[0] < -0.3 || gp.buttons[14]?.pressed),
+    right:    !!(gp.axes[0] >  0.3 || gp.buttons[15]?.pressed),
+    jump:     !!(gp.buttons[4]?.pressed || gp.buttons[5]?.pressed),
+    power:    !!(gp.buttons[2]?.pressed),
+    missile:  !!(gp.buttons[3]?.pressed),
+  };
+}
+
+// ══════════════════════════════════════════════════
+// Game loop — relay inputs every frame
+// ══════════════════════════════════════════════════
+function loop() {
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+
+  // Reset gamepad-sourced bits (keyboard bits persist via events)
+  // We build a combined view: keyboard state + gamepad state
+  const combined = inputs.map(i => ({ ...i }));
+
+  for (let gi = 0; gi < gps.length; gi++) {
+    const gp = gps[gi];
+    if (!gp) continue;
+    const pi = gpAssignment[gi];
+    if (pi === undefined || pi < 0 || pi >= numPlayers) continue;
+    const gpIn = readGp(gp);
+    const c = combined[pi];
+    for (const k of Object.keys(gpIn)) c[k] = c[k] || gpIn[k];
+  }
+
+  iframes.forEach((fr, idx) => {
+    try { fr.contentWindow.postMessage({ type:'sk-input', input: combined[idx] }, '*'); }
+    catch(_) {}
+  });
+
+  requestAnimationFrame(loop);
+}
+
+// ══════════════════════════════════════════════════
+// Gamepad panel (setup screen)
+// ══════════════════════════════════════════════════
+function refreshGpPanel() {
+  const container = document.getElementById('gp-rows');
+  if (!container) return;
+  const gps = Array.from(navigator.getGamepads ? navigator.getGamepads() : []).filter(Boolean);
+  if (!gps.length) {
+    container.innerHTML = '<div style="font-size:.7rem;color:rgba(255,255,255,.3);">Conecta mandos y aparecerán aquí…</div>';
+    return;
+  }
+  container.innerHTML = '';
+  gps.forEach(gp => {
+    const def = gpAssignment[gp.index] ?? (gp.index + 1); // default: GP0→P2, GP1→P3…
+    gpAssignment[gp.index] = def;
+    const row = document.createElement('div');
+    row.className = 'gp-row';
+    row.innerHTML = `
+      <label>MANDO ${gp.index + 1}</label>
+      <select id="gpsel-${gp.index}">
+        ${[0,1,2,3].map(p=>`<option value="${p}" ${def===p?'selected':''}>JUGADOR ${p+1}</option>`).join('')}
+      </select>
+      <span class="gp-id">${gp.id.slice(0,22)}</span>`;
+    row.querySelector('select').addEventListener('change', ev => {
+      gpAssignment[gp.index] = parseInt(ev.target.value);
+    });
+    container.appendChild(row);
+  });
+}
+
+window.addEventListener('gamepadconnected', e => {
+  const pi = e.gamepad.index + 1; // default: GP0→P2
+  gpAssignment[e.gamepad.index] = pi;
+  refreshGpPanel();
+});
+window.addEventListener('gamepaddisconnected', e => {
+  delete gpAssignment[e.gamepad.index];
+  refreshGpPanel();
+});
+setInterval(refreshGpPanel, 2500);
+
+// ══════════════════════════════════════════════════
+// Start split
+// ══════════════════════════════════════════════════
+function startSplit(n) {
+  numPlayers = n;
+  splitRoom = 'SPLIT_' + Math.random().toString(36).slice(2,7).toUpperCase();
+
+  document.getElementById('setup').style.display = 'none';
+  const grid = document.getElementById('grid');
+  const hud  = document.getElementById('outer-hud');
+  grid.innerHTML = '';
+  grid.style.display = 'grid';
+  grid.className = 'grid-' + n;
+  hud.style.display = 'flex';
+  document.getElementById('hud-room').textContent = `SALA: ${splitRoom}`;
+
+  iframes = [];
+  let loadedCount = 0;
+
+  for (let i = 0; i < n; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    const fr = document.createElement('iframe');
+    const pName = encodeURIComponent(`${baseName} (${i+1})`);
+    // splitMode=1 → iframe espera sk-connect-now del padre para unirse simultáneamente
+    fr.src = `/game.html?autoJoin=${encodeURIComponent(splitRoom)}&playerName=${pName}&hideMenu=1&splitMode=1`;
+    fr.setAttribute('allow', 'fullscreen');
+
+    fr.addEventListener('load', () => {
+      loadedCount++;
+      if (loadedCount === n) {
+        // Todos los iframes cargaron — disparar conexión simultánea
+        setTimeout(() => {
+          iframes.forEach(f => {
+            try { f.contentWindow.postMessage({ type: 'sk-connect-now' }, '*'); }
+            catch(_) {}
+          });
+        }, 150); // buffer mínimo para que el JS interno termine de inicializarse
+      }
+    });
+
+    const lbl = document.createElement('div');
+    lbl.className = 'plabel';
+    lbl.textContent = `P${i+1} · ${decodeURIComponent(pName)}`;
+    cell.appendChild(fr);
+    cell.appendChild(lbl);
+    grid.appendChild(cell);
+    iframes.push(fr);
+  }
+  requestAnimationFrame(loop);
+}
+
+// ══════════════════════════════════════════════════
+// Back to setup
+// ══════════════════════════════════════════════════
+function backToSetup() {
+  iframes.forEach(fr => { try { fr.src = 'about:blank'; } catch(_) {} });
+  iframes = [];
+  numPlayers = 0;
+  document.getElementById('grid').style.display = 'none';
+  document.getElementById('outer-hud').style.display = 'none';
+  document.getElementById('setup').style.display = 'flex';
+  refreshGpPanel();
+}
+
+// ══════════════════════════════════════════════════
+// Online room modal — P1 migrates all splits
+// ══════════════════════════════════════════════════
+async function openOnline() {
+  const modal = document.getElementById('online-modal');
+  const list  = document.getElementById('modal-rooms');
+  modal.style.display = 'flex';
+  list.innerHTML = '<div style="color:rgba(255,255,255,.4);font-size:.8rem;">Cargando salas…</div>';
+  try {
+    const data = await fetch('/api/rooms').then(r => r.json());
+    list.innerHTML = '';
+    if (!data.rooms?.length) {
+      list.innerHTML = '<div style="color:rgba(255,255,255,.4);font-size:.8rem;">No hay salas disponibles</div>';
+      return;
+    }
+    data.rooms.forEach(r => {
+      const full = r.players >= r.max || r.phase === 'racing' || r.phase === 'countdown';
+      const item = document.createElement('div');
+      item.className = 'ritem';
+      item.innerHTML = `
+        <div>
+          <strong>${r.name}</strong>
+          <span style="color:${full?'#f33':'#0f6'};margin-left:10px;font-size:.72rem;">${r.players}/${r.max}</span>
+          <span style="color:rgba(255,255,255,.3);font-size:.65rem;margin-left:8px;">${r.phase.toUpperCase()}</span>
+        </div>
+        <div style="font-size:.63rem;color:#0df;">HOST: ${r.host||'?'}</div>`;
+      const joinBtn = document.createElement('button');
+      joinBtn.textContent = 'UNIRSE';
+      joinBtn.className = 'btn btn-sm' + (full?' btn-ghost':'');
+      joinBtn.disabled = full;
+      joinBtn.style.marginLeft = '12px';
+      if (!full) joinBtn.onclick = () => migrateAll(r.name);
+      item.appendChild(joinBtn);
+      list.appendChild(item);
+    });
+  } catch(_) {
+    list.innerHTML = '<div style="color:#f33;font-size:.8rem;">Error al obtener salas</div>';
+  }
+}
+function closeOnline() { document.getElementById('online-modal').style.display = 'none'; }
+
+// Migrar todas las instancias a una sala online
+function migrateAll(roomName) {
+  closeOnline();
+  iframes.forEach((fr, idx) => {
+    const pName = encodeURIComponent(`${baseName} (${idx+1})`);
+    try {
+      fr.contentWindow.postMessage({ type:'sk-migrate', room: roomName, playerName: decodeURIComponent(pName) }, '*');
+    } catch(_) {}
+  });
+  document.getElementById('hud-room').textContent = `ONLINE: ${roomName}`;
+}
+</script>
+</body>
+</html>

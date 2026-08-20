@@ -5,7 +5,7 @@ import bcrypt from 'bcrypt';
 import fetch from 'node-fetch';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { WebSocketServer } from 'ws';
+import { Server } from 'socket.io';
 import { createServer } from 'http';
 
 dotenv.config();
@@ -13,7 +13,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+const io = new Server(server, { cors: { origin: '*' } });
 
 // Configuración de middleware
 app.use(cors());
@@ -69,6 +69,7 @@ app.get('/api/init-db', async (req, res) => {
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 username VARCHAR(50) UNIQUE NOT NULL,
+                email VARCHAR(100) UNIQUE,
                 password_hash VARCHAR(255) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -83,6 +84,11 @@ app.get('/api/init-db', async (req, res) => {
             );
         `;
         await executeQuery(queryUsers);
+        try {
+            await executeQuery('ALTER TABLE users ADD COLUMN email VARCHAR(100) UNIQUE;');
+        } catch (e) {
+            console.log('[DB] Nota: Columna email ya existe o no se pudo crear en este paso.');
+        }
         await executeQuery(queryLeaderboard);
         res.json({ message: 'Tablas inicializadas correctamente' });
     } catch (error) {
@@ -93,19 +99,19 @@ app.get('/api/init-db', async (req, res) => {
 
 // Endpoint de Registro
 app.post('/api/auth/register', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, password, email } = req.body;
     
-    if (!username || !password) {
+    if (!username || !password || !email) {
         return res.status(400).json({ error: 'Faltan datos' });
     }
 
     try {
         // Verificar si el usuario ya existe
-        const checkQuery = `SELECT * FROM users WHERE username = '${username}'`;
+        const checkQuery = `SELECT * FROM users WHERE username = '${username}' OR email = '${email}'`;
         const checkResult = await executeQuery(checkQuery);
         
         if (checkResult.result && checkResult.result.length > 0) {
-            return res.status(400).json({ error: 'El usuario ya existe' });
+            return res.status(400).json({ error: 'El usuario o el correo ya existen' });
         }
 
         // Hashear contraseña
@@ -113,11 +119,59 @@ app.post('/api/auth/register', async (req, res) => {
         const passwordHash = await bcrypt.hash(password, saltRounds);
 
         // Insertar usuario
-        const insertQuery = `INSERT INTO users (username, password_hash) VALUES ('${username}', '${passwordHash}')`;
+        const insertQuery = `INSERT INTO users (username, email, password_hash) VALUES ('${username}', '${email}', '${passwordHash}')`;
         await executeQuery(insertQuery);
         
         console.log(`[INFO] Nuevo usuario registrado: ${username}`);
         res.status(201).json({ message: 'Usuario registrado exitosamente' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+// Endpoint de Registro Rápido
+app.post('/api/auth/quick-register', async (req, res) => {
+    const { username, email } = req.body;
+    
+    if (!username || !email) {
+        return res.status(400).json({ error: 'Faltan datos' });
+    }
+
+    try {
+        // Verificar si el correo ya existe
+        const checkEmailQuery = `SELECT * FROM users WHERE email = '${email}'`;
+        const emailResult = await executeQuery(checkEmailQuery);
+        
+        if (emailResult.result && emailResult.result.length > 0) {
+            // Ya existe una cuenta con este correo: Iniciar sesión automáticamente
+            const user = emailResult.result[0];
+            console.log(`[INFO] Inicio de sesión rápido existente: ${user.username}`);
+            return res.status(200).json({ message: 'Sesión iniciada exitosamente', username: user.username, userId: user.id });
+        }
+
+        // Si el correo no existe, verificar que el nombre de usuario esté libre
+        const checkUserQuery = `SELECT * FROM users WHERE username = '${username}'`;
+        const userResult = await executeQuery(checkUserQuery);
+        if (userResult.result && userResult.result.length > 0) {
+            return res.status(400).json({ error: 'El nombre de usuario ya está en uso' });
+        }
+
+        // Hashear contraseña por defecto (ya que es cuenta rápida)
+        const saltRounds = 10;
+        const passwordHash = await bcrypt.hash(email + '_quick', saltRounds);
+
+        // Insertar usuario
+        const insertQuery = `INSERT INTO users (username, email, password_hash) VALUES ('${username}', '${email}', '${passwordHash}')`;
+        await executeQuery(insertQuery);
+        
+        // Obtener el usuario insertado para loguearlo
+        const finalUserQuery = `SELECT id, username FROM users WHERE username = '${username}'`;
+        const finalUserResult = await executeQuery(finalUserQuery);
+        const userInserted = finalUserResult.result[0];
+
+        console.log(`[INFO] Registro rápido: ${username}`);
+        res.status(201).json({ message: 'Usuario registrado exitosamente', username: userInserted.username, userId: userInserted.id });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Error interno del servidor' });
@@ -185,33 +239,52 @@ app.post('/api/leaderboard', async (req, res) => {
     }
 });
 
+// Endpoint para listar salas activas
+app.get('/api/rooms', (req, res) => {
+    const activeRooms = [];
+    for (const [roomName, room] of Object.entries(rooms)) {
+        activeRooms.push({
+            name: roomName,
+            host: room.isSystemRoom ? 'SERVIDOR (SISTEMA)' : (room.players.length > 0 ? room.players[0].name : 'Vacío'),
+            players: room.players.length,
+            max: 6,
+            phase: room.phase
+        });
+    }
+    res.json({ rooms: activeRooms });
+});
+
 // ---------------------------------------------------------
 // Lógica de Salas y WebSockets (Multijugador)
 // ---------------------------------------------------------
-const rooms = {}; // roomName -> { phase, laps, players: [{ws, id, name, ready, color, timeMs}] }
+const rooms = {
+    'GLOBAL': { phase: 'waiting', laps: 3, players: [], isSystemRoom: true }
+}; // roomName -> { phase, laps, players: [{ws, id, name, ready, color, timeMs}], isSystemRoom }
 const playersGlobal = {}; // id -> { ws, room, id, name }
 const MIN_PLAYERS = 2;
 
 function getRoom(roomName) {
     if (!rooms[roomName]) {
-        rooms[roomName] = { phase: 'waiting', laps: 3, players: [] };
+        rooms[roomName] = { phase: 'waiting', laps: 3, players: [], isSystemRoom: false };
     }
     return rooms[roomName];
 }
 
-function broadcastToRoom(roomName, msg, excludeWs = null) {
+function broadcastToRoom(roomName, msg, excludeSocket = null) {
     const room = rooms[roomName];
     if (!room) return;
-    const msgStr = JSON.stringify(msg);
-    room.players.forEach(p => {
-        if (p.ws !== excludeWs && p.ws.readyState === 1 /* OPEN */) {
-            p.ws.send(msgStr);
-        }
-    });
+    
+    // Si queremos excluir al emisor, usamos excludeSocket.to(room).emit
+    // Si no excluimos a nadie, usamos io.to(room).emit
+    if (excludeSocket) {
+        excludeSocket.to(roomName).emit('message', msg);
+    } else {
+        io.to(roomName).emit('message', msg);
+    }
 }
 
-function handleLeave(ws) {
-    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+function handleLeave(socket) {
+    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
     if (!playerGlobal) return;
     
     const { room: roomName, id } = playerGlobal;
@@ -220,12 +293,15 @@ function handleLeave(ws) {
         room.players = room.players.filter(p => p.id !== id);
         broadcastToRoom(roomName, { type: 'player_left', id });
         
-        if (room.players.length === 0) {
+        if (room.players.length === 0 && !room.isSystemRoom) {
             delete rooms[roomName];
         } else if (room.players.length < MIN_PLAYERS && room.phase !== 'racing' && room.phase !== 'finished') {
             room.phase = 'waiting';
             if (room.countdownInterval) clearInterval(room.countdownInterval);
             broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+        } else if (room.players.length === 0 && room.isSystemRoom) {
+            room.phase = 'waiting';
+            if (room.countdownInterval) clearInterval(room.countdownInterval);
         }
     }
     delete playersGlobal[id];
@@ -234,24 +310,43 @@ function handleLeave(ws) {
 function startCountdown(roomName) {
     const room = rooms[roomName];
     if (!room) return;
-    room.phase = 'countdown';
-    let seconds = 5;
     
-    broadcastToRoom(roomName, { type: 'countdown', seconds });
+    room.phase = 'lobby_wait';
+    room.lobbySeconds = 5;
+    broadcastToRoom(roomName, { type: 'lobby_wait', seconds: room.lobbySeconds });
     
     room.countdownInterval = setInterval(() => {
-        seconds--;
-        if (seconds > 0) {
-            broadcastToRoom(roomName, { type: 'countdown', seconds });
+        room.lobbySeconds--;
+        if (room.lobbySeconds > 0) {
+            broadcastToRoom(roomName, { type: 'lobby_wait', seconds: room.lobbySeconds });
         } else {
             clearInterval(room.countdownInterval);
-            if (room.players.length >= MIN_PLAYERS) {
-                room.phase = 'racing';
-                broadcastToRoom(roomName, { type: 'race_start', laps: room.laps });
-            } else {
-                room.phase = 'waiting';
-                broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
-            }
+            
+            room.phase = 'countdown';
+            room.countdown = 5;
+            
+            room.players.forEach((p, idx) => { p.startPosition = idx; });
+            
+            broadcastToRoom(roomName, { 
+                type: 'countdown', 
+                seconds: room.countdown,
+                players: room.players.map(p => ({ id: p.id, startPosition: p.startPosition }))
+            });
+            
+            room.countdownInterval = setInterval(() => {
+                room.countdown--;
+                if (room.countdown > 0) {
+                    broadcastToRoom(roomName, { type: 'countdown', seconds: room.countdown });
+                } else {
+                    clearInterval(room.countdownInterval);
+                    if (room.players.length > 0) {
+                        room.phase = 'racing';
+                        broadcastToRoom(roomName, { type: 'race_start', laps: room.laps });
+                    } else {
+                        room.phase = 'waiting';
+                    }
+                }
+            }, 1000);
         }
     }, 1000);
 }
@@ -268,12 +363,8 @@ function checkRaceFinish(roomName) {
             .sort((a, b) => a.timeMs - b.timeMs)
             .map((r, idx) => ({ ...r, position: idx + 1 }));
             
-        // Opcional: Aquí se podría integrar la lógica para guardar el puntaje en SpiderWebARG
-        // usando executeQuery() si los jugadores están validados.
-        
         broadcastToRoom(roomName, { type: 'race_results', results, saved: false });
         
-        // Reiniciar la sala después de un tiempo
         setTimeout(() => {
             if (!rooms[roomName]) return;
             room.players.forEach(p => p.timeMs = 0);
@@ -287,10 +378,10 @@ function checkRaceFinish(roomName) {
     }
 }
 
-wss.on('connection', (ws) => {
-    ws.on('message', (message) => {
+io.on('connection', (socket) => {
+    socket.on('message', (message) => {
         try {
-            const data = JSON.parse(message);
+            const data = typeof message === 'string' ? JSON.parse(message) : message;
             const { type, room: roomName, name, pilotId, timeMs, lap } = data;
 
             switch (type) {
@@ -300,55 +391,74 @@ wss.on('connection', (ws) => {
                     const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
                     
                     const room = getRoom(roomName);
+                    const isSplitRoom = roomName.startsWith('SPLIT_');
+
+                    if (room.phase === 'racing') {
+                        socket.emit('message', { type: 'error', message: 'La carrera ya empezó' });
+                        return;
+                    }
                     
-                    if (room.phase === 'racing' || room.phase === 'countdown') {
-                        ws.send(JSON.stringify({ type: 'error', message: 'La carrera ya empezó' }));
+                    if (room.players.length >= 6) {
+                        socket.emit('message', { type: 'error', message: 'La sala está llena (máximo 6 jugadores)' });
                         return;
                     }
 
-                    // Limpiar sesión previa si se reconecta rápido
                     if (playersGlobal[id]) {
-                        handleLeave(playersGlobal[id].ws);
+                        const prevSocket = playersGlobal[id].ws;
+                        handleLeave(prevSocket);
+                        prevSocket.disconnect(true);
                     }
 
-                    const player = { ws, id, name, ready: true, color, timeMs: 0, position: 0 };
+                    const player = { ws: socket, id, name, ready: true, color, timeMs: 0, position: 0 };
                     room.players.push(player);
-                    playersGlobal[id] = { ws, room: roomName, id, name };
+                    playersGlobal[id] = { ws: socket, room: roomName, id, name };
+                    
+                    socket.join(roomName);
 
-                    ws.send(JSON.stringify({
+                    socket.emit('message', {
                         type: 'joined',
                         room: roomName,
                         playerId: id,
                         players: room.players.map(p => ({ id: p.id, name: p.name, color: p.color, ready: p.ready }))
-                    }));
+                    });
 
                     broadcastToRoom(roomName, {
                         type: 'player_joined',
                         id, name, color
-                    }, ws);
+                    }, socket);
 
-                    if (room.players.length >= MIN_PLAYERS && room.phase === 'waiting') {
+                    const effectiveMin = isSplitRoom ? 1 : MIN_PLAYERS;
+
+                    if (room.phase === 'waiting' && room.players.length >= effectiveMin) {
                         startCountdown(roomName);
+                    } else if (room.phase === 'lobby_wait') {
+                        socket.emit('message', { type: 'lobby_wait', seconds: room.lobbySeconds || 5 });
+                    } else if (room.phase === 'countdown') {
+                        socket.emit('message', { 
+                            type: 'countdown', 
+                            seconds: room.countdown || 5,
+                            players: room.players.map(p => ({ id: p.id, startPosition: p.startPosition }))
+                        });
                     } else if (room.phase === 'waiting') {
-                        broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+                        broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: effectiveMin });
                     }
                     break;
                 }
                 
                 case 'state': {
-                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
                     if (!playerGlobal) return;
                     const { x, y, z, angle, speed, boosting } = data;
                     broadcastToRoom(playerGlobal.room, {
                         type: 'state',
                         id: playerGlobal.id,
                         x, y, z, angle, speed, boosting, lap
-                    }, ws);
+                    }, socket);
                     break;
                 }
 
                 case 'finish': {
-                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
                     if (!playerGlobal) return;
                     const room = rooms[playerGlobal.room];
                     if (!room) return;
@@ -362,7 +472,7 @@ wss.on('connection', (ws) => {
                 }
                 
                 case 'hit': {
-                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === ws);
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
                     if (!playerGlobal) return;
                     broadcastToRoom(playerGlobal.room, {
                         type: 'hit',
@@ -373,16 +483,16 @@ wss.on('connection', (ws) => {
                 }
                 
                 case 'leave': {
-                    handleLeave(ws);
+                    handleLeave(socket);
                     break;
                 }
             }
         } catch (e) {
-            console.error('WS Error:', e);
+            console.error('Socket Error:', e);
         }
     });
 
-    ws.on('close', () => handleLeave(ws));
+    socket.on('disconnect', () => handleLeave(socket));
 });
 
 server.listen(PORT, () => {

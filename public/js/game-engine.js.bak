@@ -38,40 +38,12 @@
   const H = container.clientHeight || window.innerHeight;
   const camera = new THREE.PerspectiveCamera(65, W / H, 0.1, 1400);
 
-  let initSettings = { resolution: "1", graphics: "high" };
-  try {
-    if (window._skSettings) {
-      initSettings = window._skSettings;
-    } else {
-      initSettings = JSON.parse(localStorage.getItem('sk_settings') || '{"resolution":"1","graphics":"high"}');
-    }
-  } catch(e) {}
-
-  let antialiasSetting = (initSettings.graphics === "high");
-  
-  const renderer = new THREE.WebGLRenderer({ antialias: antialiasSetting });
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(W, H);
-  
-  function applyResolution(resMultiplier) {
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * parseFloat(resMultiplier));
-  }
-  applyResolution(initSettings.resolution);
-  
-  renderer.shadowMap.enabled = (initSettings.graphics === "high");
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
-
-  window.addEventListener('sk_settings_changed', (e) => {
-    const s = e.detail;
-    applyResolution(s.resolution);
-    renderer.shadowMap.enabled = (s.graphics === "high");
-    // Notar que el antialias requiere recrear el renderer en WebGL, 
-    // pero pixelRatio y sombras se pueden cambiar en caliente.
-    // Limpiamos shadowmaps si se desactivan
-    if (!renderer.shadowMap.enabled) {
-      renderer.clearTarget(null, true, true, true);
-    }
-  });
 
   /* ──────────────────────────────────────────
      Lights
@@ -947,105 +919,6 @@
     }
   }
 
-  // --- MARCADORES EN EL HUD PARA JUGADORES REMOTOS ---
-  const playerMarkersContainer = document.getElementById('hud-player-markers');
-  const playerMarkers = {};
-
-  function updatePlayerMarkers() {
-    if (!playerMarkersContainer) return;
-    
-    // Limpiar marcadores de karts desconectados
-    for (const id in playerMarkers) {
-      if (!remoteKarts[id]) {
-        playerMarkers[id].remove();
-        delete playerMarkers[id];
-      }
-    }
-
-    const halfW = window.innerWidth / 2;
-    const halfH = window.innerHeight / 2;
-
-    for (const id in remoteKarts) {
-      const e = remoteKarts[id];
-      
-      let marker = playerMarkers[id];
-      if (!marker) {
-        marker = document.createElement('div');
-        marker.style.position = 'absolute';
-        marker.style.padding = '2px 6px';
-        marker.style.background = 'rgba(0,0,0,0.6)';
-        marker.style.border = `1px solid ${e.color || '#ff00ff'}`;
-        marker.style.color = '#fff';
-        marker.style.fontFamily = 'Share Tech Mono, monospace';
-        marker.style.fontSize = '11px';
-        marker.style.fontWeight = 'bold';
-        marker.style.borderRadius = '4px';
-        marker.style.transform = 'translate(-50%, -50%)';
-        marker.style.whiteSpace = 'nowrap';
-        marker.style.pointerEvents = 'none';
-        marker.style.textShadow = '0 0 2px #000';
-        marker.textContent = e.name || 'PILOTO';
-        playerMarkersContainer.appendChild(marker);
-        playerMarkers[id] = marker;
-      }
-
-      // Proyectar posición 3D a 2D
-      const pos = e.pos.clone();
-      pos.y += 1.8; // Un poco por encima del kart
-      pos.project(camera);
-
-      // pos.z > 1 significa que está detrás de la cámara
-      let isBehind = pos.z > 1;
-      if (isBehind) {
-         pos.x *= -1;
-         pos.y *= -1;
-      }
-
-      let screenX = (pos.x * halfW) + halfW;
-      let screenY = -(pos.y * halfH) + halfH;
-
-      // Clamp a los bordes de la pantalla si está fuera o detrás
-      const margin = 24;
-      let isOffscreen = false;
-      if (screenX < margin || screenX > window.innerWidth - margin || 
-          screenY < margin || screenY > window.innerHeight - margin || isBehind) {
-          isOffscreen = true;
-          
-          const dx = screenX - halfW;
-          const dy = screenY - halfH;
-          const len = Math.sqrt(dx*dx + dy*dy) || 1;
-          const nx = dx / len;
-          const ny = dy / len;
-          
-          // Distancia al borde
-          const boundX = halfW - margin;
-          const boundY = halfH - margin;
-          
-          const scale = Math.min(
-              Math.abs(nx) > 0.001 ? boundX / Math.abs(nx) : Infinity,
-              Math.abs(ny) > 0.001 ? boundY / Math.abs(ny) : Infinity
-          );
-          
-          screenX = halfW + nx * scale;
-          screenY = halfH + ny * scale;
-      }
-
-      marker.style.left = `${screenX}px`;
-      marker.style.top = `${screenY}px`;
-      
-      // Estilo dinámico dependiendo de si está a la vista o no
-      if (isOffscreen) {
-          marker.style.opacity = '0.5';
-          marker.style.borderStyle = 'dashed';
-          marker.style.background = 'rgba(0,0,0,0.8)';
-      } else {
-          marker.style.opacity = '1.0';
-          marker.style.borderStyle = 'solid';
-          marker.style.background = 'rgba(0,0,0,0.4)';
-      }
-    }
-  }
-
   function triggerRemoteHit(targetId) {
     if (targetId === 'local') {
       if (window.SpiderKart && window.SpiderKart.spinOut) window.SpiderKart.spinOut();
@@ -1206,10 +1079,8 @@
      Input & Cross-Platform Support
   ────────────────────────────────────────── */
   const keys = {};
-  const touchInput  = { forward:false, backward:false, left:false, right:false, jump:false, power:false, missile:false };
-  let   gamepadInput = { forward:false, backward:false, left:false, right:false, jump:false, power:false, missile:false };
-  // splitInput: recibe inputs del padre (split.html) vía postMessage cuando splitMode=1
-  const splitInput  = { forward:false, backward:false, left:false, right:false, jump:false, power:false, missile:false };
+  const touchInput = { forward: false, backward: false, left: false, right: false, jump: false, power: false };
+  let gamepadInput = { forward: false, backward: false, left: false, right: false, jump: false, power: false };
   let currentPlatform = 'pc';
 
   function detectPlatform() {
@@ -1229,23 +1100,12 @@
   }
   detectPlatform();
 
-  // URL params — debe estar antes de los listeners de teclado
-  const urlParamsEngine = new URLSearchParams(window.location.search);
-  const forcedGamepad = urlParamsEngine.has('gamepad') ? parseInt(urlParamsEngine.get('gamepad'), 10) : null;
-  const isKeyboardOnly = urlParamsEngine.get('keyboard') === '1';
-  const isSplitMode    = urlParamsEngine.get('splitMode') === '1';
-
-  // Teclado — en splitMode el padre intercepta todo el teclado y lo envia via postMessage
-  const allowKeyboard = !isSplitMode && (isKeyboardOnly || forcedGamepad === null);
+  // Teclado
   window.addEventListener('keydown', e => {
-    if (!allowKeyboard) return;
     keys[e.code] = true;
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown') e.preventDefault();
   });
-  window.addEventListener('keyup', e => { 
-    if (!allowKeyboard) return;
-    keys[e.code] = false; 
-  });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
 
   // Táctil
   function setupTouchBtn(id, key) {
@@ -1262,45 +1122,25 @@
   setupTouchBtn('tc-power', 'power');
 
   // Gamepad
-
-  // Modo split: recibir inputs del frame padre vía postMessage
-  if (isSplitMode) {
-    window.addEventListener('message', e => {
-      if (e.data?.type === 'sk-input') {
-        Object.assign(splitInput, e.data.input);
-      }
-    });
-  }
   function pollGamepads() {
-      // En splitMode, el frame padre (split.html) maneja todos los gamepads y
-      // los envía vía postMessage. No polleamos aquí para evitar doble input.
-      if (isKeyboardOnly || isSplitMode) return;
       const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
       gamepadInput = { forward: false, backward: false, left: false, right: false, jump: false, power: false };
-      
-      let targetGp = null;
-      if (forcedGamepad !== null && gamepads[forcedGamepad]) {
-          targetGp = gamepads[forcedGamepad];
-      } else if (forcedGamepad === null) {
-          // Default to first connected gamepad
-          for (let i = 0; i < gamepads.length; i++) {
-              if (gamepads[i]) { targetGp = gamepads[i]; break; }
+      for (let i = 0; i < gamepads.length; i++) {
+          const gp = gamepads[i];
+          if (gp) {
+              // Eje Izquierdo (X)
+              if (gp.axes[0] < -0.3) gamepadInput.left = true;
+              if (gp.axes[0] > 0.3) gamepadInput.right = true;
+              
+              // Botones (Distribución típica Xbox)
+              if (gp.buttons[0] && gp.buttons[0].pressed) gamepadInput.forward = true; // A (Cross)
+              if (gp.buttons[1] && gp.buttons[1].pressed) gamepadInput.backward = true; // B (Circle)
+              if (gp.buttons[2] && gp.buttons[2].pressed) gamepadInput.power = true; // X (Square)
+              if (gp.buttons[7] && gp.buttons[7].pressed) gamepadInput.forward = true; // RT
+              if (gp.buttons[6] && gp.buttons[6].pressed) gamepadInput.backward = true; // LT
+              if (gp.buttons[4] && gp.buttons[4].pressed) gamepadInput.jump = true; // LB
+              if (gp.buttons[5] && gp.buttons[5].pressed) gamepadInput.jump = true; // RB
           }
-      }
-      
-      if (targetGp) {
-          // Eje Izquierdo (X)
-          if (targetGp.axes[0] < -0.3) gamepadInput.left = true;
-          if (targetGp.axes[0] > 0.3) gamepadInput.right = true;
-          
-          // Botones (Distribución típica Xbox)
-          if (targetGp.buttons[0] && targetGp.buttons[0].pressed) gamepadInput.forward = true; // A
-          if (targetGp.buttons[1] && targetGp.buttons[1].pressed) gamepadInput.backward = true; // B
-          if (targetGp.buttons[2] && targetGp.buttons[2].pressed) gamepadInput.power = true; // X
-          if (targetGp.buttons[7] && targetGp.buttons[7].pressed) gamepadInput.forward = true; // RT
-          if (targetGp.buttons[6] && targetGp.buttons[6].pressed) gamepadInput.backward = true; // LT
-          if (targetGp.buttons[4] && targetGp.buttons[4].pressed) gamepadInput.jump = true; // LB
-          if (targetGp.buttons[5] && targetGp.buttons[5].pressed) gamepadInput.jump = true; // RB
       }
   }
 
@@ -1665,34 +1505,16 @@
       minimapCtx.shadowBlur = 0;
     }
 
-    // Punto del jugador (Triángulo)
+    // Punto del jugador
     const { mx: px, my: pz } = worldToMinimap(state.posX, state.posZ);
+    // Sombra/glow
     minimapCtx.shadowColor = 'rgba(0,212,255,0.8)';
     minimapCtx.shadowBlur = 6;
     minimapCtx.beginPath();
-    const size = 5;
-    minimapCtx.moveTo(px + Math.cos(state.angle) * size, pz + Math.sin(state.angle) * size);
-    minimapCtx.lineTo(px + Math.cos(state.angle + 2.4) * size, pz + Math.sin(state.angle + 2.4) * size);
-    minimapCtx.lineTo(px + Math.cos(state.angle - 2.4) * size, pz + Math.sin(state.angle - 2.4) * size);
-    minimapCtx.closePath();
+    minimapCtx.arc(px, pz, 3.5, 0, Math.PI * 2);
     minimapCtx.fillStyle = state.isWrongWay ? '#ff0000' : '#00d4ff';
     minimapCtx.fill();
     minimapCtx.shadowBlur = 0;
-
-    // Dibujar otros jugadores (Triángulos)
-    for (const id in remoteKarts) {
-      const e = remoteKarts[id];
-      const { mx, my } = worldToMinimap(e.pos.x, e.pos.z);
-      
-      minimapCtx.fillStyle = e.color || '#ff00ff';
-      minimapCtx.beginPath();
-      const s = 4.5;
-      minimapCtx.moveTo(mx + Math.cos(e.angle) * s, my + Math.sin(e.angle) * s);
-      minimapCtx.lineTo(mx + Math.cos(e.angle + 2.4) * s, my + Math.sin(e.angle + 2.4) * s);
-      minimapCtx.lineTo(mx + Math.cos(e.angle - 2.4) * s, my + Math.sin(e.angle - 2.4) * s);
-      minimapCtx.closePath();
-      minimapCtx.fill();
-    }
 
     // Línea de meta
     const { mx: sx, my: sz } = worldToMinimap(trackSamples[0].x, trackSamples[0].z);
@@ -2090,13 +1912,13 @@
       kartGroup.visible = true;
     }
 
-    const forward    = splitInput.forward  || keys['KeyW'] || (!isSplitMode && keys['ArrowUp'])    || touchInput.forward  || gamepadInput.forward;
-    const backward   = splitInput.backward || keys['KeyS'] || (!isSplitMode && keys['ArrowDown'])  || touchInput.backward || gamepadInput.backward;
-    const left       = splitInput.left     || keys['KeyA'] || (!isSplitMode && keys['ArrowLeft'])  || touchInput.left     || gamepadInput.left;
-    const right      = splitInput.right    || keys['KeyD'] || (!isSplitMode && keys['ArrowRight']) || touchInput.right    || gamepadInput.right;
-    const jumpKey    = splitInput.jump     || keys['Space'] || touchInput.jump  || gamepadInput.jump;
-    const powerKey   = splitInput.power    || keys['KeyK'] || keys['KeyX'] || touchInput.power || gamepadInput.power;
-    const missileKey = splitInput.missile  || keys['KeyE'];
+    const forward    = keys['KeyW'] || keys['ArrowUp'] || touchInput.forward || gamepadInput.forward;
+    const backward   = keys['KeyS'] || keys['ArrowDown'] || touchInput.backward || gamepadInput.backward;
+    const left       = keys['KeyA'] || keys['ArrowLeft'] || touchInput.left || gamepadInput.left;
+    const right      = keys['KeyD'] || keys['ArrowRight'] || touchInput.right || gamepadInput.right;
+    const jumpKey    = keys['Space'] || touchInput.jump || gamepadInput.jump;
+    const powerKey   = keys['KeyK'] || touchInput.power || gamepadInput.power;
+    const missileKey = keys['KeyE'];
     const turning    = left || right;
 
     // ── Turbo (Tecla K) ──
@@ -2439,7 +2261,6 @@
     const dt = clock.getDelta();
     pollGamepads();
     update(dt);
-    updatePlayerMarkers();
     renderer.render(scene, camera);
   }
 
@@ -2473,7 +2294,7 @@
     },
     applyRemoteState,
     removeRemotePlayer,
-    resetRace(doLocalCountdown = true) {
+    resetRace() {
       state.lap = 0;
       state.raceFinished = false;
       state.bestLap = -1;
@@ -2508,9 +2329,7 @@
         p.mesh.scale.setScalar(1.0);
       }
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
-      if (doLocalCountdown !== false) {
-        startLocalCountdown();
-      }
+      startLocalCountdown();
     },
     setCountdown(seconds) {
       if (localCountdownTimer) {

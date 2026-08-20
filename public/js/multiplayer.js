@@ -122,304 +122,266 @@
     try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* noop */ }
   }
 
-  let session = getSession();
+  const urlParamsMulti = new URLSearchParams(window.location.search);
+  const autoJoinRoom = urlParamsMulti.get('autoJoin');
+  const forcedPlayerName = urlParamsMulti.get('playerName');
+  const hideMenuForce = urlParamsMulti.get('hideMenu') === '1';
+  const isSplitModeMulti = urlParamsMulti.get('splitMode') === '1';
+
+  // En modo split ignoramos la sesión guardada para que cada iframe reciba
+  // un pilotId único, evitando que el servidor los expulse por "reconexión".
+  let session = isSplitModeMulti ? null : getSession();
+  if (forcedPlayerName && session) {
+      session.name = forcedPlayerName;
+  }
+  // En modo split, crear sesión guest automática si no hay sesión registrada
+  if (isSplitModeMulti && autoJoinRoom && !session && forcedPlayerName) {
+      session = { name: forcedPlayerName, pilotId: 'split_' + Math.random().toString(36).slice(2,10), isGuest: true };
+  }
 
   /* ──────────────────────────────────────────
-     UI — panel de sala (inputs con pointer-events propios,
-     separado del HUD que es puramente informativo)
+     Menú Principal y Lobby
   ────────────────────────────────────────── */
-  function buildUI() {
-    const panel = document.createElement('div');
-    panel.id = 'sk-mp-panel';
-    panel.innerHTML = `
-      <div class="sk-mp-status" id="sk-mp-status">● SIN CONEXIÓN</div>
-      ${DEBUG_MODE ? '<div class="sk-mp-debug">MODO DEBUG — 1 JUGADOR, SIN GUARDAR PUNTOS</div>' : ''}
+  const mainMenu = document.getElementById('main-menu');
+  const mmButtons = document.getElementById('mm-buttons');
+  const mpLobby = document.getElementById('mp-lobby');
+  const btnBestLap = document.getElementById('btn-best-lap');
+  const btnMultiplayer = document.getElementById('btn-multiplayer');
+  const btnRefreshRooms = document.getElementById('btn-refresh-rooms');
+  const roomsList = document.getElementById('rooms-list');
+  const roomNameInput = document.getElementById('new-room-name');
+  const btnCreateRoom = document.getElementById('btn-create-room');
+  const btnBackMm = document.getElementById('btn-back-mm');
 
-      <div class="sk-mp-section" id="sk-mp-session-section">
-        <div class="sk-mp-row">
-          <input id="sk-mp-name" class="sk-mp-input sk-mp-input-wide" maxlength="12" placeholder="Nombre de piloto" />
-        </div>
-        <div class="sk-mp-row">
-          <input type="password" id="sk-mp-password" class="sk-mp-input sk-mp-input-wide" placeholder="Contraseña" />
-        </div>
-        <div class="sk-mp-row">
-          <button id="sk-mp-login" class="sk-mp-btn">Iniciar sesión</button>
-          <button id="sk-mp-register" class="sk-mp-btn" style="margin-left: 6px;">Registrarse</button>
-        </div>
-      </div>
+  const btnExitRace = document.getElementById('btn-exit-race');
 
-      <div class="sk-mp-section hidden" id="sk-mp-room-section">
-        <div class="sk-mp-pilot" id="sk-mp-pilot"></div>
-        <div class="sk-mp-row">
-          <input id="sk-mp-room" class="sk-mp-input sk-mp-input-wide" maxlength="8" placeholder="SALA" />
-        </div>
-        <div class="sk-mp-row">
-          <button id="sk-mp-join" class="sk-mp-btn">Unirse</button>
-          <button id="sk-mp-leave" class="sk-mp-btn hidden">Salir</button>
-        </div>
-        <button id="sk-mp-logout" class="sk-mp-btn sk-mp-btn-ghost">Cerrar sesión</button>
-      </div>
-
-      <div class="sk-mp-race-status hidden" id="sk-mp-race-status"></div>
-      <ul class="sk-mp-players" id="sk-mp-players"></ul>
-    `;
-    container.appendChild(panel);
-
-    const style = document.createElement('style');
-    style.textContent = `
-      #sk-mp-panel {
-        position:absolute; top:60px; left:20px;
-        width:250px; pointer-events:auto;
-        font-family:'Share Tech Mono',monospace; font-size:0.72rem;
-        background:rgba(10,10,18,0.88);
-        border:1px solid rgba(163,0,0,0.5);
-        border-radius:6px; padding:12px 14px;
-        color:#eee; z-index:15;
-        box-shadow:0 8px 32px rgba(0,0,0,0.6);
-        backdrop-filter:blur(8px);
-      }
-      .sk-mp-status { letter-spacing:0.08em; color:#ff3333; margin-bottom:8px; font-weight:700; display:flex; align-items:center; gap:6px; }
-      .sk-mp-status.sk-mp-ok { color:#39d17d; }
-      .sk-mp-debug {
-        font-size:0.58rem; letter-spacing:0.06em; color:#ffcc00;
-        background:rgba(255,204,0,0.12); border:1px solid rgba(255,204,0,0.35);
-        padding:4px 8px; border-radius:3px; margin-bottom:8px;
-      }
-      .sk-mp-section.hidden { display:none; }
-      .sk-mp-pilot {
-        font-size:0.68rem; color:#00d4ff;
-        margin-bottom:8px; letter-spacing:0.06em; font-weight:700;
-        border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:4px;
-      }
-      .sk-mp-row { display:flex; gap:6px; margin-bottom:6px; }
-      .sk-mp-input {
-        width:50%; background:rgba(255,255,255,0.08);
-        border:1px solid rgba(255,255,255,0.2); color:#fff;
-        font-family:inherit; font-size:0.7rem; padding:6px 8px; border-radius:3px;
-        outline:none; transition:border-color 0.2s;
-      }
-      .sk-mp-input:focus { border-color:rgba(163,0,0,0.8); }
-      .sk-mp-input-wide { width:100%; }
-      .sk-mp-btn {
-        flex:1; background:rgba(163,0,0,0.4); border:1px solid rgba(163,0,0,0.7);
-        color:#fff; font-family:inherit; font-size:0.68rem; letter-spacing:0.08em;
-        padding:6px 0; border-radius:3px; cursor:pointer; font-weight:700;
-        transition:all 0.2s;
-      }
-      .sk-mp-btn:hover { background:rgba(196,0,0,0.7); box-shadow:0 0 10px rgba(163,0,0,0.5); }
-      .sk-mp-btn.hidden { display:none; }
-      .sk-mp-btn-ghost {
-        background:transparent; border:1px solid rgba(255,255,255,0.2);
-        color:rgba(255,255,255,0.6); margin-top:4px; font-size:0.6rem;
-      }
-      .sk-mp-btn-ghost:hover { background:rgba(255,255,255,0.1); color:#fff; }
-      .sk-mp-race-status {
-        margin-top:8px; padding:6px 8px;
-        background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12);
-        border-radius:3px; font-size:0.62rem; letter-spacing:0.04em;
-        color:#fff;
-      }
-      .sk-mp-race-status.hidden { display:none; }
-      .sk-mp-players { list-style:none; margin:6px 0 0; padding:0; max-height:110px; overflow-y:auto; }
-      .sk-mp-players li {
-        padding:4px 0; color:rgba(255,255,255,0.85);
-        border-top:1px solid rgba(255,255,255,0.06);
-        display:flex; justify-content:space-between; font-size:0.68rem;
-      }
-      .sk-mp-players li .sk-mp-ready { color:#39d17d; font-size:0.62rem; font-weight:700; }
-      .sk-mp-players li .sk-mp-notready { color:rgba(255,255,255,0.3); font-size:0.62rem; }
-    `;
-    document.head.appendChild(style);
-  }
-  buildUI();
-
-  const statusEl = document.getElementById('sk-mp-status');
-  const sessionSection = document.getElementById('sk-mp-session-section');
-  const roomSection = document.getElementById('sk-mp-room-section');
-  const nameInput = document.getElementById('sk-mp-name');
-  const passwordInput = document.getElementById('sk-mp-password');
-  const loginBtn = document.getElementById('sk-mp-login');
-  const registerBtn = document.getElementById('sk-mp-register');
-  const pilotLabel = document.getElementById('sk-mp-pilot');
-  const roomInput = document.getElementById('sk-mp-room');
-  const joinBtn = document.getElementById('sk-mp-join');
-  const leaveBtn = document.getElementById('sk-mp-leave');
-  const logoutBtn = document.getElementById('sk-mp-logout');
-  const playersList = document.getElementById('sk-mp-players');
-  const raceStatusEl = document.getElementById('sk-mp-race-status');
-
-  function setStatus(text, ok) {
-    if (!statusEl) return;
-    statusEl.textContent = text;
-    statusEl.classList.toggle('sk-mp-ok', !!ok);
+  if (hideMenuForce && mainMenu) {
+      mainMenu.style.display = 'none';
+      window.sessionStorage.setItem('sk_hide_menu', '1');
   }
 
-  function setRaceStatus(text) {
-    if (!raceStatusEl) return;
-    if (!text) {
-      raceStatusEl.classList.add('hidden');
-      raceStatusEl.textContent = '';
-      return;
-    }
-    raceStatusEl.classList.remove('hidden');
-    raceStatusEl.textContent = text;
+  if (isSplitModeMulti && autoJoinRoom && session) {
+      // En splitMode esperamos la señal del padre (split.html) para asegurar
+      // que TODOS los iframes se conecten al mismo tiempo a la misma sala.
+      window.addEventListener('message', e => {
+          if (e.data?.type === 'sk-connect-now') {
+              if (mainMenu) mainMenu.style.display = 'none';
+              window.sessionStorage.setItem('sk_hide_menu', '1');
+              connect(autoJoinRoom, session.name);
+          }
+      });
+  } else if (autoJoinRoom && session) {
+      // Modo normal (no split): autoconectar con pequeño delay
+      setTimeout(() => {
+          if (mainMenu) mainMenu.style.display = 'none';
+          window.sessionStorage.setItem('sk_hide_menu', '1');
+          connect(autoJoinRoom, session.name);
+      }, 500);
   }
 
-  function renderPlayers() {
-    if (!playersList) return;
-    playersList.innerHTML = '';
-    Object.keys(players).forEach(id => {
-      const li = document.createElement('li');
-      const mine = id === playerId ? '★ ' : '';
-      const nameSpan = document.createElement('span');
-      nameSpan.textContent = mine + (players[id].name || 'Piloto');
-      const readySpan = document.createElement('span');
-      readySpan.className = players[id].ready ? 'sk-mp-ready' : 'sk-mp-notready';
-      readySpan.textContent = players[id].ready ? 'LISTO' : '—';
-      li.appendChild(nameSpan);
-      li.appendChild(readySpan);
-      playersList.appendChild(li);
-    });
+  if (btnExitRace) {
+      btnExitRace.addEventListener('click', () => {
+          disconnect();
+          if (!hideMenuForce) {
+              mainMenu.style.display = 'flex';
+              mmButtons.style.display = 'flex';
+              mpLobby.style.display = 'none';
+              window.sessionStorage.removeItem('sk_hide_menu');
+          }
+      });
   }
 
-  // Refleja si hay sesión activa: muestra el panel de sala (con el
-  // nombre del piloto ya cargado) o el panel de login, nunca los dos.
-  function renderSessionUI() {
-    if (session) {
-      sessionSection.classList.add('hidden');
-      roomSection.classList.remove('hidden');
-      pilotLabel.textContent = 'PILOTO: ' + session.name.toUpperCase();
-    } else {
-      sessionSection.classList.remove('hidden');
-      roomSection.classList.add('hidden');
-    }
+  // Funciones auxiliares para mostrar mensajes dentro del juego o lobby
+  function showToast(msg) {
+    console.log('[SpiderKart] ' + msg); // Placeholder for toast if needed
   }
-  renderSessionUI();
 
-  /* ──────────────────────────────────────────
-     Login (sesión) — sin sesión no se puede unir a una sala, porque
-     no hay a nombre de quién guardar nada.
-  ────────────────────────────────────────── */
-  loginBtn.addEventListener('click', async () => {
-    const name = (nameInput.value || '').trim().slice(0, 12);
-    const password = (passwordInput.value || '').trim();
-    if (!name || !password) {
-      setStatus('FALTAN DATOS', false);
-      nameInput.focus();
-      return;
-    }
-    loginBtn.disabled = true;
-    setStatus('CONECTANDO...', false);
-    try {
-        const res = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: name, password })
-        });
-        const data = await res.json();
-        if (res.ok) {
-            session = startSession(name);
-            session.userId = data.userId;
-            renderSessionUI();
-            setStatus('LOGIN OK', true);
-        } else {
-            setStatus(data.error || 'ERROR LOGIN', false);
-        }
-    } catch (e) {
-        setStatus('ERROR SERVIDOR', false);
-    }
-    loginBtn.disabled = false;
-  });
+  if (btnBestLap) {
+      btnBestLap.addEventListener('click', () => {
+          mainMenu.style.display = 'none';
+          window.sessionStorage.setItem('sk_hide_menu', '1');
+          startLocalTimeTrial();
+      });
+  }
 
-  registerBtn.addEventListener('click', async () => {
-    const name = (nameInput.value || '').trim().slice(0, 12);
-    const password = (passwordInput.value || '').trim();
-    if (!name || !password) {
-      setStatus('FALTAN DATOS', false);
-      nameInput.focus();
-      return;
-    }
-    registerBtn.disabled = true;
-    setStatus('REGISTRANDO...', false);
-    try {
-        const res = await fetch('/api/auth/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: name, password })
-        });
-        const data = await res.json();
-        if (res.ok) {
-            setStatus('REGISTRO OK. INICIA SESIÓN', true);
-            passwordInput.value = '';
-        } else {
-            setStatus(data.error || 'ERROR REGISTRO', false);
-        }
-    } catch (e) {
-        setStatus('ERROR SERVIDOR', false);
-    }
-    registerBtn.disabled = false;
-  });
+  if (btnMultiplayer) {
+      btnMultiplayer.addEventListener('click', () => {
+          checkSessionAndShowModal(); // Muestra modal si no hay sesión
+          if (!session) return; // Espera a que haya sesión
+          
+          mmButtons.style.display = 'none';
+          mpLobby.style.display = 'block';
+          fetchRooms();
+      });
+  }
 
-  logoutBtn.addEventListener('click', () => {
-    disconnect();
-    endSession();
-    session = null;
-    renderSessionUI();
+  if (btnBackMm) {
+      btnBackMm.addEventListener('click', () => {
+          mpLobby.style.display = 'none';
+          mmButtons.style.display = 'flex';
+      });
+  }
+
+  if (btnRefreshRooms) {
+      btnRefreshRooms.addEventListener('click', fetchRooms);
+  }
+
+  if (btnCreateRoom) {
+      btnCreateRoom.addEventListener('click', () => {
+          const rName = roomNameInput.value.trim().toUpperCase();
+          if (rName.length > 0) {
+              mainMenu.style.display = 'none';
+              window.sessionStorage.setItem('sk_hide_menu', '1');
+              connect(rName, session.name);
+          }
+      });
+  }
+
+  async function fetchRooms() {
+      if (!roomsList) return;
+      roomsList.innerHTML = '<div style="color:rgba(255,255,255,0.5); font-size:0.8rem; text-align:center;">CARGANDO SALAS...</div>';
+      try {
+          const res = await fetch('/api/rooms');
+          const data = await res.json();
+          roomsList.innerHTML = '';
+          
+          if (!data.rooms || data.rooms.length === 0) {
+              roomsList.innerHTML = '<div style="color:rgba(255,255,255,0.5); font-size:0.8rem; text-align:center;">NO HAY SALAS ACTIVAS</div>';
+              return;
+          }
+
+          data.rooms.forEach(r => {
+              const div = document.createElement('div');
+              div.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding:10px; border:1px solid rgba(255,255,255,0.1); border-radius:3px;';
+              
+              const info = document.createElement('div');
+              info.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+              info.innerHTML = `
+                <div>
+                  <span style="color:#fff; font-weight:bold; font-size:1.1rem; margin-right:15px;">${r.name}</span>
+                  <span style="color:${r.players >= r.max ? '#ff3333' : '#00ff66'}; font-size:0.8rem;">${r.players}/${r.max}</span>
+                  <span style="color:rgba(255,255,255,0.5); font-size:0.7rem; margin-left:10px;">${r.phase.toUpperCase()}</span>
+                </div>
+                <div style="font-size:0.65rem; color:#aaa; letter-spacing:0.05em;">HOST: <span style="color:#00d4ff;">${r.host || 'Desc.'}</span></div>
+              `;
+              
+              const btn = document.createElement('button');
+              btn.textContent = 'UNIRSE';
+              btn.style.cssText = 'background:rgba(163,0,0,0.4); border:1px solid rgba(163,0,0,0.7); color:#fff; padding:6px 15px; font-family:inherit; cursor:pointer; font-size:0.8rem; transition:background 0.2s;';
+              
+              if (r.players >= r.max || r.phase === 'racing' || r.phase === 'countdown') {
+                  btn.disabled = true;
+                  btn.style.opacity = '0.5';
+                  btn.style.cursor = 'not-allowed';
+              } else {
+                  btn.onclick = () => {
+                      mainMenu.style.display = 'none';
+                      window.sessionStorage.setItem('sk_hide_menu', '1');
+                      connect(r.name, session.name);
+                  };
+              }
+
+              div.appendChild(info);
+              div.appendChild(btn);
+              roomsList.appendChild(div);
+          });
+      } catch (err) {
+          roomsList.innerHTML = '<div style="color:#ff3333; font-size:0.8rem; text-align:center;">ERROR AL OBTENER SALAS</div>';
+      }
+  }
+
+  function startLocalTimeTrial() {
+      // Bypassea la lógica multiplayer e inicia una carrera local
+      room = null;
+      playerId = session ? session.pilotId : ('pilot_' + Math.random().toString(36).slice(2,10));
+      players[playerId] = { name: session ? session.name : 'Tú', color: '#00ff66', ready: true };
+      race.phase = 'racing';
+      race.startedAt = Date.now();
+      
+      const evt = new CustomEvent('spiderkart:start', { detail: { isMultiplayer: false, laps: DEFAULT_LAPS } });
+      window.dispatchEvent(evt);
+      if (window.SpiderKart) { window.SpiderKart.resetRace(); }
+      
+      startStateBroadcast();
+      startLapPoll();
+  }
+
+
+  // Escuchar migración de sala desde el frame padre (split.html)
+  window.addEventListener('message', e => {
+    if (e.data?.type === 'sk-migrate') {
+      const newRoom = e.data.room;
+      const newName = e.data.playerName || (session?.name) || 'Piloto';
+      if (mainMenu) mainMenu.style.display = 'none';
+      window.sessionStorage.setItem('sk_hide_menu', '1');
+      connect(newRoom, newName);
+    }
   });
 
   /* ──────────────────────────────────────────
      Conexión
   ────────────────────────────────────────── */
+
   function connect(roomCode, name) {
-    if (ws) { try { ws.close(); } catch (e) { /* noop */ } }
+    if (ws) {
+      // ws.disconnect() in socket.io automatically triggers leave logic if we don't reconnect
+      ws.disconnect();
+    }
     room = roomCode;
     race.phase = 'lobby';
     race.finished = false;
     setRaceStatus(null);
 
     try {
-      ws = new WebSocket(WS_URL);
+      // Usar io global proporcionado por el script importado en html
+      ws = io(WS_URL, {
+          reconnectionAttempts: MAX_RETRIES,
+          reconnectionDelay: 1500
+      });
     } catch (e) {
       handleOffline();
       return;
     }
 
-    ws.addEventListener('open', () => {
+    ws.on('connect', () => {
       retries = 0;
       setStatus('CONECTADO — SALA ' + room, true);
-      ws.send(JSON.stringify({
+      ws.emit('message', {
         type: 'join', room, name, pilotId: session ? session.pilotId : null
-      }));
+      });
 
       if (stateInterval) clearInterval(stateInterval);
       stateInterval = setInterval(() => {
-        if (!window.SpiderKart || !ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!window.SpiderKart || !ws || !ws.connected) return;
         if (race.phase !== 'racing') return; // no spamear estado fuera de carrera
         const localState = window.SpiderKart.getLocalState();
-        ws.send(JSON.stringify(Object.assign({ type: 'state' }, localState)));
+        ws.emit('message', Object.assign({ type: 'state' }, localState));
         checkLocalFinish(localState);
       }, 1000 / STATE_HZ);
     });
 
-    ws.addEventListener('message', ev => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      handleMessage(msg);
+    ws.on('message', msg => {
+      // Socket.io maneja objetos por defecto, pero si por alguna razón es string
+      const payload = typeof msg === 'string' ? JSON.parse(msg) : msg;
+      handleMessage(payload);
     });
 
-    ws.addEventListener('close', () => {
+    ws.on('disconnect', (reason) => {
       if (stateInterval) { clearInterval(stateInterval); stateInterval = null; }
-      if (retries < MAX_RETRIES) {
-        retries++;
-        setStatus('RECONECTANDO… (' + retries + '/' + MAX_RETRIES + ')', false);
-        setTimeout(() => connect(room, name), 1500 * retries);
-      } else {
-        handleOffline();
+      if (reason === 'io client disconnect') {
+          // Desconexión intencional (ej. migración de sala o click en salir)
+          return;
       }
+      setStatus('DESCONECTADO', false);
     });
 
-    ws.addEventListener('error', () => {
-      // el evento 'close' que sigue resuelve estado y reintentos
+    ws.on('connect_error', (error) => {
+        if (ws.io.opts.reconnectionAttempts <= retries) {
+            handleOffline();
+        } else {
+            retries++;
+            setStatus('RECONECTANDO… (' + retries + '/' + MAX_RETRIES + ')', false);
+        }
     });
   }
 
@@ -466,14 +428,27 @@
     race.phase = 'finished';
     const timeMs = Math.round(performance.now() - race.startedAt);
 
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'finish', timeMs, lap: localState.lap }));
+    if (ws && ws.connected) {
+      ws.emit('message', { type: 'finish', timeMs, lap: localState.lap });
       setRaceStatus('¡Carrera terminada! Esperando resultados de la sala…');
     } else {
-      // Local/offline (debug): no hay a quién mandarle el resultado.
       if (lapPollInterval) { clearInterval(lapPollInterval); lapPollInterval = null; }
       const timeStr = (timeMs / 1000).toFixed(2) + 's';
-      setRaceStatus('¡Carrera terminada en ' + timeStr + '! (modo debug: no se guarda)');
+      
+      if (session && session.userId) {
+          const score = Math.max(0, 300000 - timeMs); // Asume base 300 segs (5 mins)
+          fetch('/api/leaderboard', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: session.userId, score })
+          }).then(() => {
+              setRaceStatus('¡Carrera terminada en ' + timeStr + '! Puntaje guardado.');
+          }).catch(() => {
+              setRaceStatus('¡Carrera terminada en ' + timeStr + '! (Error al guardar puntaje)');
+          });
+      } else {
+          setRaceStatus('¡Carrera terminada en ' + timeStr + '! (modo local: no se guardó)');
+      }
     }
   }
 
@@ -520,12 +495,17 @@
         setRaceStatus('Esperando jugadores… (' + msg.count + '/' + msg.min + ')');
         break;
 
+      case 'lobby_wait':
+        setRaceStatus('Esperando más jugadores… (' + msg.seconds + ')');
+        break;
+
       case 'countdown':
         race.phase = 'countdown';
         setRaceStatus('¡LARGADA EN ' + msg.seconds + '…!');
         if (window.SpiderKart) {
-          if (msg.seconds === 5) {
-            const myPos = Object.keys(players).indexOf(playerId);
+          if (msg.players) {
+            const me = msg.players.find(p => p.id === playerId);
+            const myPos = me ? (me.startPosition || 0) : 0;
             window.SpiderKart.lockAndReset(myPos);
           }
           if (window.SpiderKart.setCountdown) {
@@ -541,10 +521,15 @@
         race.finished = false;
         if (window.SpiderKart) {
           if (window.SpiderKart.setCountdown) window.SpiderKart.setCountdown(0);
-          else {
-            window.SpiderKart.resetRace();
-            window.SpiderKart.unlock();
+          else window.SpiderKart.unlock();
+          
+          if (window.SpiderKart.resetRace) {
+            // El resetRace() de SpiderKart ya no debería bloquear si le pasamos false
+            // O directamente no lo llamamos, porque lockAndReset() ya preparó todo
+            // Vamos a solo reiniciar tiempos locales
+            window.SpiderKart.resetRace(false);
           }
+          window.SpiderKart.unlock(); // Asegurar desbloqueo
         }
         setRaceStatus('¡EN CARRERA! ' + race.laps + ' vueltas.');
         break;
@@ -595,11 +580,23 @@
     setRaceStatus(lines + savedNote);
   }
 
+  // Funciones de UI que fueron reemplazadas o eliminadas
+  function setStatus(msg, isGood) {
+    console.log('[Status]', msg);
+  }
+  function setRaceStatus(msg) {
+    if (msg) console.log('[Race]', msg);
+    // TODO: Mostrar en el HUD si es necesario
+  }
+  function renderPlayers() {
+    // El viejo panel fue eliminado, así que no renderizamos la lista por ahora
+  }
+
   function disconnect() {
     if (stateInterval) { clearInterval(stateInterval); stateInterval = null; }
     if (lapPollInterval) { clearInterval(lapPollInterval); lapPollInterval = null; }
     if (ws) {
-      try { ws.send(JSON.stringify({ type: 'leave' })); ws.close(); } catch (e) { /* noop */ }
+      try { ws.emit('message', { type: 'leave' }); ws.disconnect(); } catch (e) { /* noop */ }
     }
     ws = null;
     if (window.SpiderKart) {
@@ -612,28 +609,7 @@
     renderPlayers();
     setStatus('SIN CONEXIÓN', false);
     setRaceStatus(null);
-    joinBtn.classList.remove('hidden');
-    leaveBtn.classList.add('hidden');
   }
-
-  joinBtn.addEventListener('click', () => {
-    if (!session) {
-      // No debería poder llegar acá sin sesión (la sección de sala
-      // está oculta hasta loguearse), pero se valida igual por las
-      // dudas de que se dispare desde otro lado.
-      setStatus('INICIÁ SESIÓN PRIMERO', false);
-      return;
-    }
-    const roomCode = (roomInput.value || 'SPIDER').trim().toUpperCase().slice(0, 8) || 'SPIDER';
-
-    retries = 0;
-    setStatus('CONECTANDO…', false);
-    connect(roomCode, session.name);
-    joinBtn.classList.add('hidden');
-    leaveBtn.classList.remove('hidden');
-  });
-
-  leaveBtn.addEventListener('click', disconnect);
 
   // Expuesto por si se quiere disparar la conexión desde otro lugar
   // (por ejemplo un botón "Multijugador" en el menú principal).
@@ -650,4 +626,56 @@
       }
     }
   };
+
+  // Quick Register Modal Logic (Game.html)
+  function checkSessionAndShowModal() {
+    if (!session) {
+      const modal = document.getElementById('quick-register-modal');
+      if (modal) modal.style.display = 'flex';
+    }
+  }
+
+  const quickForm = document.getElementById('quick-register-form');
+  if (quickForm) {
+      quickForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const username = document.getElementById('quick-username').value;
+          const email = document.getElementById('quick-email').value;
+          const btn = document.getElementById('quick-submit-btn');
+          const alert = document.getElementById('quick-alert');
+          
+          btn.disabled = true;
+          btn.textContent = 'CARGANDO...';
+          
+          try {
+              const res = await fetch('/api/auth/quick-register', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ username, email })
+              });
+              const data = await res.json();
+              
+              if (res.ok) {
+                  session = startSession(data.username);
+                  session.userId = data.userId;
+                  localStorage.setItem('spiderkart_username', data.username);
+                  localStorage.setItem('spiderkart_userId', data.userId);
+                  
+                  document.getElementById('quick-register-modal').style.display = 'none';
+              } else {
+                  alert.textContent = data.error || 'Error al crear cuenta';
+                  alert.style.display = 'block';
+              }
+          } catch(err) {
+              alert.textContent = 'Error de conexión';
+              alert.style.display = 'block';
+          }
+          btn.disabled = false;
+          btn.textContent = 'COMENZAR';
+      });
+  }
+
+  // Check on load
+  checkSessionAndShowModal();
+
 })();
