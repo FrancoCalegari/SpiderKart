@@ -140,34 +140,71 @@
 
   <!-- ===================== HERO ===================== -->
   <header class="hero-tac" id="hero">
-    <div class="hero-tac__content">
-      <div class="eyebrow-tag">
-        <span class="sw-pulse"></span>&nbsp; UNDERCODE EVENT — DEMO DE CAPACIDADES
-      </div>
-      <h1 class="hero-headline">
-        <span class="headline-line1">SPIDER</span><br>
-        <span class="headline-line2"><span class="text-accent">KART</span></span><br>
-        <span class="headline-line3 headline-sub">CARRERAS 3D</span>
-      </h1>
-      <p class="hero-desc">
-        Juego de karts 3D en el navegador, desarrollado por <strong>SpiderWebARG</strong>.<br>Competí, subí al top del ranking y demostrá quién es el más rápido.
-      </p>
-      <div class="hero-actions">
-        <button class="sw-btn sw-btn--primary sw-btn--lg" onclick="document.getElementById('juego').scrollIntoView()">
-          <i class="fa-solid fa-gamepad"></i> VER JUEGO
-        </button>
-      </div>
-      <div class="hero-metrics">
-        <div class="metric-block">
-          <div class="metric-val">3D</div>
-          <div class="metric-label">MOTOR THREE.JS</div>
+    <div class="hero-tac__content hero-tac__content--split">
+
+      <!-- Left: Text -->
+      <div class="hero-left">
+        <div class="eyebrow-tag">
+          <span class="sw-pulse"></span>&nbsp; UNDERCODE EVENT — DEMO DE CAPACIDADES
         </div>
-        <div class="metric-divider"></div>
-        <div class="metric-block">
-          <div class="metric-val">RT</div>
-          <div class="metric-label">PUNTAJES EN TIEMPO REAL</div>
+        <h1 class="hero-headline">
+          <span class="headline-line1">SPIDER</span><br>
+          <span class="headline-line2"><span class="text-accent">KART</span></span><br>
+          <span class="headline-line3 headline-sub">CARRERAS 3D</span>
+        </h1>
+        <p class="hero-desc">
+          Juego de karts 3D en el navegador, desarrollado por <strong>SpiderWebARG</strong>.<br>Competí, subí al top del ranking y demostrá quién es el más rápido.
+        </p>
+        <div class="hero-actions">
+          <button class="sw-btn sw-btn--primary sw-btn--lg" onclick="document.getElementById('juego').scrollIntoView()">
+            <i class="fa-solid fa-gamepad"></i> VER JUEGO
+          </button>
+        </div>
+        <div class="hero-metrics">
+          <div class="metric-block">
+            <div class="metric-val">3D</div>
+            <div class="metric-label">MOTOR THREE.JS</div>
+          </div>
+          <div class="metric-divider"></div>
+          <div class="metric-block">
+            <div class="metric-val">RT</div>
+            <div class="metric-label">PUNTAJES EN TIEMPO REAL</div>
+          </div>
         </div>
       </div>
+
+      <!-- Right: Race Preview -->
+      <div class="hero-right">
+        <div class="race-preview" id="race-preview">
+          <!-- HUD overlay -->
+          <div class="rp-hud">
+            <div class="rp-hud-tl">
+              <span class="rp-label">// PREVIEW</span>
+              <span class="rp-live"><span class="sw-pulse"></span> DEMO</span>
+            </div>
+            <div class="rp-hud-tr">
+              <span class="rp-speed-label">SPD</span>
+              <span class="rp-speed-val" id="rp-speed">000</span>
+            </div>
+            <div class="rp-hud-bl">
+              <span class="rp-label">LAP</span>
+              <span class="rp-lap" id="rp-lap">01 / 05</span>
+            </div>
+            <div class="rp-hud-br">
+              <span class="rp-label">TIME</span>
+              <span class="rp-time" id="rp-time">00:00.000</span>
+            </div>
+          </div>
+          <!-- HUD corners -->
+          <div class="rp-corner rp-corner--tl"></div>
+          <div class="rp-corner rp-corner--tr"></div>
+          <div class="rp-corner rp-corner--bl"></div>
+          <div class="rp-corner rp-corner--br"></div>
+          <!-- Canvas -->
+          <canvas id="rp-canvas"></canvas>
+        </div>
+      </div>
+
     </div>
   </header>
 
@@ -297,6 +334,281 @@
 
   <!-- Scripts del portal (sin el motor de juego — ese vive en game.html) -->
   <script src="js/main.js"></script>
+  <!-- Three.js for hero race preview -->
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js"}}</script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    (function initRacePreview() {
+      const canvas = document.getElementById('rp-canvas');
+      const container = document.getElementById('race-preview');
+      if (!canvas || !container) return;
+
+      // --- Renderer ---
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 0.9;
+
+      function resize() {
+        const w = container.clientWidth  || container.offsetWidth  || 640;
+        const h = container.clientHeight || container.offsetHeight || 400;
+        if (w === 0 || h === 0) return;
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+
+      // --- Scene ---
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x04040a);
+      scene.fog = new THREE.FogExp2(0x04040a, 0.045);
+
+      // --- Camera ---
+      const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 300);
+
+      // --- Lights ---
+      const ambient = new THREE.AmbientLight(0x112233, 1.2);
+      scene.add(ambient);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
+      dirLight.position.set(20, 40, 10);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.set(1024, 1024);
+      dirLight.shadow.camera.near = 1;
+      dirLight.shadow.camera.far = 200;
+      dirLight.shadow.camera.left = -60;
+      dirLight.shadow.camera.right = 60;
+      dirLight.shadow.camera.top = 60;
+      dirLight.shadow.camera.bottom = -60;
+      scene.add(dirLight);
+
+      const redSpot = new THREE.PointLight(0xff2200, 4, 12);
+      scene.add(redSpot);
+
+      // --- Ground grid ---
+      const gridHelper = new THREE.GridHelper(200, 40, 0x330000, 0x1a0000);
+      scene.add(gridHelper);
+
+      // --- Track (oval) ---
+      const TRACK_RX = 22, TRACK_RZ = 13, TRACK_W = 5;
+      const trackShape = new THREE.Shape();
+      trackShape.absellipse(0, 0, TRACK_RX + TRACK_W, TRACK_RZ + TRACK_W, 0, Math.PI * 2, false);
+      const hole = new THREE.Path();
+      hole.absellipse(0, 0, TRACK_RX - TRACK_W, TRACK_RZ - TRACK_W, 0, Math.PI * 2, false);
+      trackShape.holes.push(hole);
+      const trackGeo = new THREE.ShapeGeometry(trackShape, 80);
+      const trackMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9, metalness: 0.1, side: THREE.DoubleSide });
+      const trackMesh = new THREE.Mesh(trackGeo, trackMat);
+      trackMesh.rotation.x = -Math.PI / 2;
+      trackMesh.receiveShadow = true;
+      scene.add(trackMesh);
+
+      // Track edge lines
+      const innerCurve = new THREE.EllipseCurve(0, 0, TRACK_RX - TRACK_W, TRACK_RZ - TRACK_W, 0, Math.PI*2, false, 0);
+      const outerCurve = new THREE.EllipseCurve(0, 0, TRACK_RX + TRACK_W, TRACK_RZ + TRACK_W, 0, Math.PI*2, false, 0);
+      [innerCurve, outerCurve].forEach(curve => {
+        const pts = curve.getPoints(80).map(p => new THREE.Vector3(p.x, 0.02, p.y));
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xa30000, linewidth: 1 });
+        scene.add(new THREE.LineLoop(lineGeo, lineMat));
+      });
+
+      // --- Kart (simple geometric kart) ---
+      const kartGroup = new THREE.Group();
+
+      // Body
+      const bodyGeo = new THREE.BoxGeometry(0.9, 0.35, 1.5);
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc0000, roughness: 0.4, metalness: 0.6 });
+      const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
+      bodyMesh.position.y = 0.3;
+      bodyMesh.castShadow = true;
+      kartGroup.add(bodyMesh);
+
+      // Cockpit
+      const cockpitGeo = new THREE.BoxGeometry(0.6, 0.22, 0.55);
+      const cockpitMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 });
+      const cockpitMesh = new THREE.Mesh(cockpitGeo, cockpitMat);
+      cockpitMesh.position.set(0, 0.54, 0.1);
+      cockpitMesh.castShadow = true;
+      kartGroup.add(cockpitMesh);
+
+      // Steering wheel
+      const wheelGeo = new THREE.TorusGeometry(0.12, 0.018, 6, 20);
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+      const steeringWheel = new THREE.Mesh(wheelGeo, wheelMat);
+      steeringWheel.position.set(0, 0.66, 0.31);
+      steeringWheel.rotation.x = Math.PI / 3;
+      kartGroup.add(steeringWheel);
+
+      // Wheels
+      const wGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.18, 14);
+      const wMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
+      const rimGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.2, 10);
+      const rimMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8, roughness: 0.2 });
+      const wheelPositions = [
+        [-0.55, 0.15, 0.55],
+        [0.55, 0.15, 0.55],
+        [-0.55, 0.15, -0.55],
+        [0.55, 0.15, -0.55],
+      ];
+      wheelPositions.forEach(([x, y, z]) => {
+        const w = new THREE.Mesh(wGeo, wMat);
+        w.rotation.z = Math.PI / 2;
+        w.position.set(x, y, z);
+        w.castShadow = true;
+        kartGroup.add(w);
+        const r = new THREE.Mesh(rimGeo, rimMat);
+        r.rotation.z = Math.PI / 2;
+        r.position.set(x, y, z);
+        kartGroup.add(r);
+      });
+
+      // Exhaust glow
+      const exhaustLight = new THREE.PointLight(0xff4400, 2, 2);
+      exhaustLight.position.set(0, 0.3, -0.85);
+      kartGroup.add(exhaustLight);
+
+      scene.add(kartGroup);
+      redSpot.target = kartGroup;
+
+      // --- Track path for kart movement ---
+      const TRACK_SEGS = 200;
+      function getTrackPoint(t) {
+        const angle = t * Math.PI * 2;
+        return new THREE.Vector3(
+          Math.cos(angle) * TRACK_RX,
+          0,
+          Math.sin(angle) * TRACK_RZ
+        );
+      }
+      function getTrackTangent(t) {
+        const eps = 0.001;
+        return getTrackPoint(t + eps).sub(getTrackPoint(t - eps)).normalize();
+      }
+
+      // --- Speed lines (particle trail) ---
+      const TRAIL_COUNT = 60;
+      const trailPositions = new Float32Array(TRAIL_COUNT * 3);
+      const trailGeo = new THREE.BufferGeometry();
+      trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+      const trailMat = new THREE.PointsMaterial({ color: 0xff2200, size: 0.08, transparent: true, opacity: 0.7, depthWrite: false });
+      const trail = new THREE.Points(trailGeo, trailMat);
+      scene.add(trail);
+
+      // Background stars
+      const starCount = 300;
+      const starPositions = new Float32Array(starCount * 3);
+      for (let i = 0; i < starCount; i++) {
+        starPositions[i*3]   = (Math.random() - 0.5) * 200;
+        starPositions[i*3+1] = Math.random() * 60 + 5;
+        starPositions[i*3+2] = (Math.random() - 0.5) * 200;
+      }
+      const starGeo = new THREE.BufferGeometry();
+      starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+      const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.15, transparent: true, opacity: 0.5, sizeAttenuation: true });
+      scene.add(new THREE.Points(starGeo, starMat));
+
+      // --- Camera state ---
+      let trackT = 0;
+      const KART_SPEED = 0.0003; // laps per ms (slower for smooth preview)
+      let lastTime = performance.now();
+      let lapCount = 1;
+      let raceTime = 0;
+      let trailHead = 0;
+
+      // Smooth chase-cam: lerped world position
+      // Initialise behind the kart's starting position (t=0 → x=TRACK_RX, z=0)
+      const _initKartPos = getTrackPoint(0);
+      const _initTangent = getTrackTangent(0);
+      const camCurrent  = new THREE.Vector3(
+        _initKartPos.x - _initTangent.x * 8, 4.5,
+        _initKartPos.z - _initTangent.z * 8
+      );
+      const camTarget   = new THREE.Vector3().copy(camCurrent);
+      const lookTarget  = new THREE.Vector3(_initKartPos.x, 0.6, _initKartPos.z);
+      const lookCurrent = new THREE.Vector3().copy(lookTarget);
+      const CAM_LERP  = 0.12;  // position smoothness
+      const LOOK_LERP = 0.18;  // look-at smoothness
+
+      // HUD elements
+      const hudSpeed = document.getElementById('rp-speed');
+      const hudLap   = document.getElementById('rp-lap');
+      const hudTime  = document.getElementById('rp-time');
+
+      // Animate
+      function animate(now) {
+        requestAnimationFrame(animate);
+        const dt = now - lastTime;
+        lastTime = now;
+        raceTime += dt;
+
+        // Move kart
+        const prevT = trackT;
+        trackT += KART_SPEED * dt;
+        if (trackT >= 1) {
+          trackT -= 1;
+          lapCount = Math.min(lapCount + 1, 5);
+        }
+
+        const kartPos = getTrackPoint(trackT);
+        const tangent = getTrackTangent(trackT);
+        kartGroup.position.copy(kartPos);
+        kartGroup.lookAt(kartPos.clone().add(tangent));
+
+        // Speed var oscillation
+        const speedKmh = Math.round(80 + Math.sin(now * 0.001) * 15 + Math.cos(now * 0.0007) * 10);
+        if (hudSpeed) hudSpeed.textContent = String(speedKmh).padStart(3, '0');
+        if (hudLap) hudLap.textContent = String(lapCount).padStart(2, '0') + ' / 05';
+        if (hudTime) {
+          const ms = raceTime % 1000;
+          const s  = Math.floor(raceTime / 1000) % 60;
+          const m  = Math.floor(raceTime / 60000);
+          hudTime.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0') + '.' + String(Math.floor(ms)).padStart(3,'0');
+        }
+
+        // Trail
+        trailPositions[trailHead*3]   = kartPos.x + (Math.random()-0.5)*0.3;
+        trailPositions[trailHead*3+1] = kartPos.y + 0.1;
+        trailPositions[trailHead*3+2] = kartPos.z + (Math.random()-0.5)*0.3;
+        trailHead = (trailHead + 1) % TRAIL_COUNT;
+        trailGeo.attributes.position.needsUpdate = true;
+
+        // Red spot follows kart
+        redSpot.position.copy(kartPos).add(new THREE.Vector3(0, 2, 0));
+
+        // Exhaust pulse
+        exhaustLight.intensity = 1.5 + Math.sin(now * 0.01) * 0.8;
+
+        // Smooth chase camera (reuse 'tangent' already computed above)
+        camTarget.set(
+          kartPos.x - tangent.x * 8,
+          4.5,
+          kartPos.z - tangent.z * 8
+        );
+        // Lerp current cam toward desired
+        camCurrent.lerp(camTarget, CAM_LERP);
+        camera.position.copy(camCurrent);
+
+        // Smooth look-at toward kart
+        lookTarget.set(kartPos.x, 0.6, kartPos.z);
+        lookCurrent.lerp(lookTarget, LOOK_LERP);
+        camera.lookAt(lookCurrent);
+
+        renderer.render(scene, camera);
+      }
+
+      // Use ResizeObserver for reliable sizing (avoids aspect-ratio 0×0 issue)
+      const ro = new ResizeObserver(() => resize());
+      ro.observe(container);
+      // Also handle window resize as fallback
+      window.addEventListener('resize', resize);
+      // Delay first frame until layout is painted
+      requestAnimationFrame(() => { resize(); requestAnimationFrame(animate); });
+    })();
+  </script>
   <style>
     /* === Game Launch Panel (index.html) === */
     .game-launch-panel {
@@ -350,6 +662,109 @@
     }
     .glp-play-btn:hover { box-shadow: 0 0 50px rgba(163,0,0,0.7); transform: translateY(-2px); }
     .glp-note { font-family: 'Share Tech Mono', monospace; font-size: 0.6rem; color: rgba(255,255,255,0.25); letter-spacing: 0.1em; }
+
+    /* ===== HERO SPLIT LAYOUT ===== */
+    .hero-tac__content--split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      gap: 3rem;
+    }
+    .hero-left { display: flex; flex-direction: column; }
+    .hero-right {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ===== RACE PREVIEW WIDGET ===== */
+    .race-preview {
+      position: relative;
+      width: 100%;
+      min-height: 280px;
+      aspect-ratio: 16/11;
+      max-height: 460px;
+      background: #04040a;
+      border: 1px solid rgba(163,0,0,0.4);
+      clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 20px 100%, 0 calc(100% - 20px));
+      overflow: hidden;
+      box-shadow: 0 0 60px rgba(163,0,0,0.25), inset 0 0 40px rgba(0,0,0,0.6);
+    }
+    .race-preview canvas {
+      display: block;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* HUD overlay */
+    .rp-hud {
+      position: absolute; inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      padding: 12px 14px;
+    }
+    .rp-hud-tl { position: absolute; top: 12px; left: 14px; display: flex; flex-direction: column; gap: 2px; }
+    .rp-hud-tr { position: absolute; top: 12px; right: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+    .rp-hud-bl { position: absolute; bottom: 12px; left: 14px; display: flex; flex-direction: column; gap: 2px; }
+    .rp-hud-br { position: absolute; bottom: 12px; right: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+    .rp-label {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.58rem; letter-spacing: 0.18em;
+      color: rgba(163,0,0,0.7); text-transform: uppercase;
+    }
+    .rp-live {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.6rem; color: #22c55e;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .rp-speed-label {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.55rem; letter-spacing: 0.18em; color: rgba(163,0,0,0.7);
+    }
+    .rp-speed-val {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1.9rem; font-weight: 900;
+      color: #ffffff; line-height: 1;
+      text-shadow: 0 0 20px rgba(255,50,0,0.9);
+    }
+    .rp-lap {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.75rem; color: rgba(255,255,255,0.85);
+      letter-spacing: 0.05em;
+    }
+    .rp-time {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.75rem; color: rgba(255,255,255,0.85);
+    }
+
+    /* HUD corner brackets */
+    .rp-corner {
+      position: absolute; width: 18px; height: 18px;
+      z-index: 11; pointer-events: none;
+    }
+    .rp-corner::before, .rp-corner::after {
+      content: ''; position: absolute;
+      background: var(--sw-red, #a30000);
+    }
+    .rp-corner::before { width: 100%; height: 2px; }
+    .rp-corner::after  { width: 2px; height: 100%; }
+    .rp-corner--tl { top: 0; left: 0; }
+    .rp-corner--tl::before { top: 0; left: 0; }
+    .rp-corner--tl::after  { top: 0; left: 0; }
+    .rp-corner--tr { top: 0; right: 0; transform: scaleX(-1); }
+    .rp-corner--bl { bottom: 0; left: 0; transform: scaleY(-1); }
+    .rp-corner--br { bottom: 0; right: 0; transform: scale(-1); }
+
+    /* Responsive */
+    @media (max-width: 960px) {
+      .hero-tac__content--split {
+        grid-template-columns: 1fr;
+      }
+      .hero-right { margin-top: 2rem; }
+      .race-preview { max-height: 300px; }
+    }
   </style>
 </body>
 </html>
