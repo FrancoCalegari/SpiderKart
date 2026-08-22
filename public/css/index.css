@@ -108,6 +108,9 @@
 /* Footer */
 .sw-footer { background: var(--bg-primary); border-top: 2px solid var(--sw-red); padding: 1.5rem 0; position: relative; z-index: 100; }
 .sw-footer__inner { max-width: 1280px; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 2.5rem); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+.sw-footer__brand { display: flex; align-items: center; gap: 0.75rem; }
+.sw-footer__logo { height: 24px; width: auto; opacity: 0.85; transition: opacity 0.2s ease, transform 0.2s ease; }
+.sw-footer__brand:hover .sw-footer__logo { opacity: 1; transform: scale(1.05); }
 .sw-footer__copy { font-family: var(--sw-font-m); font-size: 0.62rem; letter-spacing: 0.08em; color: rgba(var(--text-primary-rgb), 0.3); }
 .sw-footer__status { display: flex; align-items: center; gap: 0.4rem; font-family: var(--sw-font-m); font-size: 0.62rem; color: #22c55e; }
 

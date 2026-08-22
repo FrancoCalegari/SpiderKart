@@ -26,8 +26,8 @@ app.use(express.static(join(__dirname, 'public')));
 
 // Configuración de la API SpiderWebARG
 const SPIDER_API_URL = 'https://spiderwebargapi.com.ar/api/v1';
-const SPIDER_API_KEY = process.env.spiderapikey || 'c20cdfd802d9e387d77176ee597ac66f26b9513bd15d2a95886d34befc0b7ad6';
-const SPIDER_DB_NAME = process.env.spiderdbname || 'sw_Franco Calegari_SpiderKart';
+const SPIDER_API_KEY = process.env.spiderapikey;
+const SPIDER_DB_NAME = process.env.spiderdbname;
 
 // Flag para suprimir errores repetitivos de la misma naturaleza
 let _dbErrorLogged = false;

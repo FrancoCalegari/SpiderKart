@@ -107,7 +107,34 @@ body {
   padding: 0 clamp(1rem, 4vw, 2.5rem);
   display: flex; align-items: center; justify-content: space-between; height: 64px;
 }
-.sw-nav__brand { text-decoration: none; display: flex; align-items: center; gap: 8px; }
+/* Logos con soporte de Modo Claro / Oscuro */
+.sw-logo {
+  object-fit: contain;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.sw-logo--dark {
+  display: block;
+}
+.sw-logo--light {
+  display: none;
+}
+[data-theme="light"] .sw-logo--dark {
+  display: none !important;
+}
+[data-theme="light"] .sw-logo--light {
+  display: block !important;
+}
+
+.sw-nav__brand { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.sw-nav__logo {
+  height: 32px;
+  width: auto;
+  transition: transform 0.2s ease;
+}
+.sw-nav__brand:hover .sw-nav__logo {
+  transform: scale(1.08);
+}
 .brand-tag { font-family: var(--sw-font-m); color: var(--sw-red); font-size: 0.8rem; }
 .brand-name { font-family: var(--sw-font-h); font-weight: 800; font-size: 1.4rem; color: var(--sw-white); letter-spacing: 1px; }
 .brand-accent { color: var(--sw-red); }
