@@ -369,42 +369,42 @@
       // --- Scene ---
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x04040a);
-      scene.fog = new THREE.FogExp2(0x04040a, 0.045);
+      scene.fog = new THREE.FogExp2(0x04040a, 0.02);
 
       // --- Camera ---
-      const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 300);
+      const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 400);
 
       // --- Lights ---
       const ambient = new THREE.AmbientLight(0x112233, 1.2);
       scene.add(ambient);
 
       const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
-      dirLight.position.set(20, 40, 10);
+      dirLight.position.set(30, 60, 20);
       dirLight.castShadow = true;
       dirLight.shadow.mapSize.set(1024, 1024);
       dirLight.shadow.camera.near = 1;
-      dirLight.shadow.camera.far = 200;
-      dirLight.shadow.camera.left = -60;
-      dirLight.shadow.camera.right = 60;
-      dirLight.shadow.camera.top = 60;
-      dirLight.shadow.camera.bottom = -60;
+      dirLight.shadow.camera.far = 300;
+      dirLight.shadow.camera.left = -90;
+      dirLight.shadow.camera.right = 90;
+      dirLight.shadow.camera.top = 90;
+      dirLight.shadow.camera.bottom = -90;
       scene.add(dirLight);
 
-      const redSpot = new THREE.PointLight(0xff2200, 4, 12);
+      const redSpot = new THREE.PointLight(0xff2200, 4, 14);
       scene.add(redSpot);
 
       // --- Ground grid ---
-      const gridHelper = new THREE.GridHelper(200, 40, 0x330000, 0x1a0000);
+      const gridHelper = new THREE.GridHelper(320, 60, 0x330000, 0x1a0000);
       scene.add(gridHelper);
 
-      // --- Track (oval) ---
-      const TRACK_RX = 22, TRACK_RZ = 13, TRACK_W = 5;
+      // --- Track (oval más largo) ---
+      const TRACK_RX = 60, TRACK_RZ = 20, TRACK_W = 5.5;
       const trackShape = new THREE.Shape();
       trackShape.absellipse(0, 0, TRACK_RX + TRACK_W, TRACK_RZ + TRACK_W, 0, Math.PI * 2, false);
       const hole = new THREE.Path();
       hole.absellipse(0, 0, TRACK_RX - TRACK_W, TRACK_RZ - TRACK_W, 0, Math.PI * 2, false);
       trackShape.holes.push(hole);
-      const trackGeo = new THREE.ShapeGeometry(trackShape, 80);
+      const trackGeo = new THREE.ShapeGeometry(trackShape, 120);
       const trackMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9, metalness: 0.1, side: THREE.DoubleSide });
       const trackMesh = new THREE.Mesh(trackGeo, trackMat);
       trackMesh.rotation.x = -Math.PI / 2;
@@ -415,7 +415,7 @@
       const innerCurve = new THREE.EllipseCurve(0, 0, TRACK_RX - TRACK_W, TRACK_RZ - TRACK_W, 0, Math.PI*2, false, 0);
       const outerCurve = new THREE.EllipseCurve(0, 0, TRACK_RX + TRACK_W, TRACK_RZ + TRACK_W, 0, Math.PI*2, false, 0);
       [innerCurve, outerCurve].forEach(curve => {
-        const pts = curve.getPoints(80).map(p => new THREE.Vector3(p.x, 0.02, p.y));
+        const pts = curve.getPoints(120).map(p => new THREE.Vector3(p.x, 0.02, p.y));
         const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
         const lineMat = new THREE.LineBasicMaterial({ color: 0xa30000, linewidth: 1 });
         scene.add(new THREE.LineLoop(lineGeo, lineMat));
@@ -504,12 +504,12 @@
       scene.add(trail);
 
       // Background stars
-      const starCount = 300;
+      const starCount = 350;
       const starPositions = new Float32Array(starCount * 3);
       for (let i = 0; i < starCount; i++) {
-        starPositions[i*3]   = (Math.random() - 0.5) * 200;
-        starPositions[i*3+1] = Math.random() * 60 + 5;
-        starPositions[i*3+2] = (Math.random() - 0.5) * 200;
+        starPositions[i*3]   = (Math.random() - 0.5) * 350;
+        starPositions[i*3+1] = Math.random() * 70 + 5;
+        starPositions[i*3+2] = (Math.random() - 0.5) * 350;
       }
       const starGeo = new THREE.BufferGeometry();
       starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
@@ -518,7 +518,7 @@
 
       // --- Camera state ---
       let trackT = 0;
-      const KART_SPEED = 0.0003; // laps per ms (slower for smooth preview)
+      const KART_SPEED = 0.00015; // laps per ms adjusted for longer track
       let lastTime = performance.now();
       let lapCount = 1;
       let raceTime = 0;
@@ -529,8 +529,8 @@
       const _initKartPos = getTrackPoint(0);
       const _initTangent = getTrackTangent(0);
       const camCurrent  = new THREE.Vector3(
-        _initKartPos.x - _initTangent.x * 8, 4.5,
-        _initKartPos.z - _initTangent.z * 8
+        _initKartPos.x - _initTangent.x * 8.5, 4.5,
+        _initKartPos.z - _initTangent.z * 8.5
       );
       const camTarget   = new THREE.Vector3().copy(camCurrent);
       const lookTarget  = new THREE.Vector3(_initKartPos.x, 0.6, _initKartPos.z);
@@ -546,6 +546,10 @@
       // Animate
       function animate(now) {
         requestAnimationFrame(animate);
+        if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+          lastTime = now;
+          return;
+        }
         const dt = now - lastTime;
         lastTime = now;
         raceTime += dt;
@@ -589,9 +593,9 @@
 
         // Smooth chase camera (reuse 'tangent' already computed above)
         camTarget.set(
-          kartPos.x - tangent.x * 8,
+          kartPos.x - tangent.x * 8.5,
           4.5,
-          kartPos.z - tangent.z * 8
+          kartPos.z - tangent.z * 8.5
         );
         // Lerp current cam toward desired
         camCurrent.lerp(camTarget, CAM_LERP);
@@ -767,8 +771,10 @@
       .hero-tac__content--split {
         grid-template-columns: 1fr;
       }
-      .hero-right { margin-top: 2rem; }
-      .race-preview { max-height: 300px; }
+      .hero-right,
+      .race-preview {
+        display: none !important;
+      }
     }
   </style>
 </body>
