@@ -1258,8 +1258,9 @@
   setupTouchBtn('tc-right', 'right');
   setupTouchBtn('tc-accel', 'forward');
   setupTouchBtn('tc-brake', 'backward');
-  setupTouchBtn('tc-jump', 'jump');
   setupTouchBtn('tc-power', 'power');
+  setupTouchBtn('tc-missile', 'missile');
+  setupTouchBtn('tc-jump', 'jump');
 
   // Gamepad
 
@@ -2096,7 +2097,7 @@
     const right      = splitInput.right    || keys['KeyD'] || (!isSplitMode && keys['ArrowRight']) || touchInput.right    || gamepadInput.right;
     const jumpKey    = splitInput.jump     || keys['Space'] || touchInput.jump  || gamepadInput.jump;
     const powerKey   = splitInput.power    || keys['KeyK'] || keys['KeyX'] || touchInput.power || gamepadInput.power;
-    const missileKey = splitInput.missile  || keys['KeyE'];
+    const missileKey = splitInput.missile  || keys['KeyE'] || touchInput.missile;
     const turning    = left || right;
 
     // ── Turbo (Tecla K) ──
