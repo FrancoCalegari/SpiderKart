@@ -1420,6 +1420,8 @@
     powerActive: false,
     powerTimer: 0,
     powerCooldown: 0,
+    orbBoostTimer: 0,   // boost independiente del orbe amarillo (no gasta fuel de K)
+    rampBoostTimer: 0,  // boost independiente del mini-turbo de rampa (no gasta fuel de K)
     jumpCooldown: 0,
     boost: 1,
     lap: 0,
@@ -1804,10 +1806,9 @@
           spawnPickupBurst(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z);
           
           if (p.type === 'boost') {
-            // Turbo automático inmediato al agarrar orbe de velocidad
-            state.powerTimer = Math.max(state.powerTimer, 3.5);
+            // Mini-boost del orbe: usa su propio timer, NO toca powerTimer (fuel de K)
+            state.orbBoostTimer = 1.2;
             state.boost = BOOST_MULT;
-            state.powerActive = true;
             state.speed = Math.max(state.speed, MAX_SPEED * 1.25);
             if (hudPowerFx) {
               hudPowerFx.classList.remove('hidden');
@@ -2105,10 +2106,22 @@
       state.powerTimer = TURBO_DURATION;
     }
 
+    // ── Orbe boost (independiente, no consume fuel de K) ──
+    if (state.orbBoostTimer > 0) {
+      state.orbBoostTimer -= dt;
+      if (state.orbBoostTimer < 0) state.orbBoostTimer = 0;
+    }
+
+    // ── Ramp/stunt boost (independiente, no consume fuel de K) ──
+    if (state.rampBoostTimer > 0) {
+      state.rampBoostTimer -= dt;
+      if (state.rampBoostTimer < 0) state.rampBoostTimer = 0;
+    }
+
+    // ── Turbo de tecla K ──
     if (state.powerTimer > 0) {
       state.powerTimer -= dt;
       state.powerActive = true;
-      state.boost = BOOST_MULT;
       flames.forEach(f => { f.visible = true; f.scale.setScalar(1 + Math.sin(Date.now() * 0.02) * 0.3); });
       if (hudPowerFx) hudPowerFx.classList.remove('hidden');
 
@@ -2119,7 +2132,6 @@
       }
     } else {
       state.powerActive = false;
-      state.boost = 1;
       flames.forEach(f => { f.visible = false; });
       if (hudPowerFx) hudPowerFx.classList.add('hidden');
 
@@ -2129,6 +2141,9 @@
         if (state.powerCooldown < 0) state.powerCooldown = 0;
       }
     }
+
+    // ── Multiplicador de velocidad combinado (K-turbo, orbe o rampa) ──
+    state.boost = (state.powerActive || state.orbBoostTimer > 0 || state.rampBoostTimer > 0) ? BOOST_MULT : 1;
 
     // ── Disparo de Misiles / Usar Ítem (Tecla E) ──
     if (state.missileCooldown > 0) state.missileCooldown -= dt;
@@ -2253,9 +2268,7 @@
         // Si venía de una rampa / acrobacia: ¡Activar Mini Turbo de aterrizaje!
         if (state.stuntActive || state.rampJumpBoost) {
           state.speed = Math.max(state.speed * 1.25, MAX_SPEED * 1.35);
-          state.powerTimer = Math.max(state.powerTimer, 1.4); // Mini Turbo activo
-          state.boost = BOOST_MULT;
-          state.powerActive = true;
+          state.rampBoostTimer = 1.4; // Mini Turbo de rampa — NO toca fuel de K
           flames.forEach(f => {
             f.visible = true;
             f.scale.setScalar(1.5);
