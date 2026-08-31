@@ -575,6 +575,9 @@
     const dirX = Math.cos(state.angle);
     const dirZ = Math.sin(state.angle);
 
+    // Rastrear si alguna rampa está sujetando al kart en este frame
+    let rampGroundedThisFrame = false;
+
     for (const ramp of ramps) {
       const dx = state.posX - ramp.x;
       const dz = state.posZ - ramp.z;
@@ -586,21 +589,28 @@
       }
 
       // Proyección en ejes locales de la rampa
-      const longDist = dx * ramp.tanX + dz * ramp.tanZ; // -length/2 a +length/2
-      const latDist  = dx * ramp.normX + dz * ramp.normZ; // -width/2 a +width/2
+      const longDist = dx * ramp.tanX + dz * ramp.tanZ;
+      const latDist  = dx * ramp.normX + dz * ramp.normZ;
       const halfL = ramp.length / 2;
       const halfW = ramp.width / 2;
 
-      // Comprobar si el kart está sobre la rampa
-      if (Math.abs(latDist) <= halfW && longDist >= -halfL && longDist <= halfL + 1.2) {
+      // Zona real de la superficie de la rampa (sin extensión)
+      const onRampSurface = Math.abs(latDist) <= halfW && longDist >= -halfL && longDist <= halfL;
+      // Zona extendida solo para detectar el despegue en la cresta
+      const nearRampTip = Math.abs(latDist) <= halfW && longDist >= -halfL && longDist <= halfL + 1.2;
+
+      if (nearRampTip) {
         const progress = Math.min(1.0, Math.max(0.0, (longDist + halfL) / ramp.length));
         const rampY = progress * ramp.height;
 
-        // Subiendo por la rampa
-        if (state.posY <= rampY + 0.8 && state.velY <= 0.08) {
+        // Snapear al suelo de la rampa SOLO si está en la zona real de la rampa,
+        // el kart está descendiendo (velY <= 0) y no fue lanzado aún
+        if (onRampSurface && !ramp.recentlyLaunched && state.posY <= rampY + 0.3 && state.velY <= 0) {
           state.posY = rampY;
           state.isGrounded = true;
+          state.velY = 0;
           state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0.24, 0.3);
+          rampGroundedThisFrame = true; // ← marcar que la rampa está sosteniendo al kart
         }
 
         // Impulso y despegue en la cresta
@@ -657,6 +667,15 @@
           ramp.recentlyLaunched = false;
         }
       }
+    }
+
+    // Si el kart salió de la rampa sin haber saltado (rampGroundedThisFrame=false)
+    // pero sigue flotando por encima del suelo real, liberar la gravedad.
+    // Esto ocurre cuando el auto entra a la rampa y sale sin la velocidad/dirección
+    // necesaria para el lanzamiento.
+    if (!rampGroundedThisFrame && state.isGrounded && state.posY > GROUND_Y + 0.05) {
+      state.isGrounded = false;
+      state.velY = 0; // caída sin rebote
     }
   }
 
@@ -2247,6 +2266,15 @@
 
         // Estela de chispas y estrellas de la acrobacia en el aire
         spawnStuntTrail(state.posX, state.posY, state.posZ, state.stuntProgress);
+
+        // Acrobacia completada en el aire: resetear rotaciones para no quedarse congelado
+        if (state.stuntProgress >= 1.0) {
+          state.stuntActive = false;
+          state.stuntType = null;
+          state.stuntRotX = 0;
+          state.stuntRotY = 0;
+          state.stuntRotZ = 0;
+        }
       }
 
       // Inclinación aérea suave (pitch) base si no hay backflip
@@ -2287,13 +2315,17 @@
           spawnPickupBurst(state.posX, 0.2, state.posZ);
         }
 
-        // Reset de acrobacia
+        // Reset de acrobacia — forzar rotaciones a 0 para no arrastrar valores de lerp
         state.stuntActive = false;
+        state.stuntType = null;
         state.rampJumpBoost = false;
         state.stuntProgress = 0;
         state.stuntRotX = 0;
         state.stuntRotY = 0;
         state.stuntRotZ = 0;
+        // Resetear las rotaciones del grupo directamente para evitar drift acumulado
+        kartGroup.rotation.x = 0;
+        kartGroup.rotation.z = 0;
       }
     } else {
       state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0, 0.2);
