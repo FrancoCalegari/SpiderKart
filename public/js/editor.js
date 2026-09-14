@@ -347,8 +347,29 @@
       if (!confirm('¿Limpiar todos los puntos, obstáculos, rampas y orbes?')) return;
       controlPoints = []; editorObstacles = []; editorRamps = []; editorPowerups = [];
       selectedIdx = -1; hidePointInfo();
-      updatePointCount(); updateObstacleCount(); updateRampCount(); updatePowerupCount(); render();
+      updatePointCount(); updateObstacleCount(); updateRampCount(); updatePowerupCount(); render(); pushHistory();
       setStatus('info', 'Canvas limpiado.');
+    });
+
+    document.getElementById('btn-clear-obs').addEventListener('click', () => {
+      if (!confirm('¿Eliminar todos los obstáculos de la pista?')) return;
+      editorObstacles = []; selectedObsIdx = -1;
+      updateObstacleCount(); render(); pushHistory();
+      setStatus('info', 'Obstáculos limpiados.');
+    });
+
+    document.getElementById('btn-clear-ramps').addEventListener('click', () => {
+      if (!confirm('¿Eliminar todas las rampas de la pista?')) return;
+      editorRamps = []; selectedRampIdx = -1;
+      updateRampCount(); render(); pushHistory();
+      setStatus('info', 'Rampas limpiadas.');
+    });
+
+    document.getElementById('btn-clear-pu').addEventListener('click', () => {
+      if (!confirm('¿Eliminar todos los orbes de la pista?')) return;
+      editorPowerups = []; selectedPowerupIdx = -1;
+      updatePowerupCount(); render(); pushHistory();
+      setStatus('info', 'Orbes limpiados.');
     });
 
     // Level name
