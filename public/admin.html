@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpiderKart — Editor de Niveles | Admin</title>
+
+  <!-- Google Fonts: Tactical System -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+
+  <!-- Theme (carga primero para evitar FOUC) -->
+  <script src="/js/theme.js"></script>
+
+  <!-- Design System Táctico -->
+  <link rel="stylesheet" href="/css/tactical.css" />
+  <link rel="icon" type="image/x-icon" href="/logo_blanco.ico" />
+
+  <style>
+    /* ── Admin-specific styles ── */
+    html, body { height: 100%; overflow: hidden; }
+
+    /* ── Login Screen ── */
+    #login-screen {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 5rem 1rem 2rem;
+      position: relative; z-index: 10;
+    }
+    #login-screen.hidden { display: none; }
+
+    .sw-auth-wrap { width: 100%; max-width: 440px; }
+    .sw-auth-panel {
+      border: 1px solid var(--sw-border);
+      background: var(--bg-secondary);
+      clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+      overflow: hidden;
+    }
+    .sw-auth-body { padding: 2rem; }
+    .sw-auth-title {
+      font-family: var(--sw-font-h); font-size: 1.8rem; font-weight: 800;
+      color: var(--sw-white); line-height: 1; margin-bottom: 0.4rem;
+    }
+    .sw-auth-sub {
+      font-size: 0.8rem; color: rgba(var(--text-primary-rgb), 0.5);
+      margin-bottom: 2rem; font-family: var(--sw-font-m); letter-spacing: 0.05em;
+    }
+    #login-error { min-height: 1.5rem; }
+
+    /* ── Main Editor Layout ── */
+    #editor-screen {
+      display: flex; height: 100vh; position: relative; z-index: 10;
+    }
+    #editor-screen.hidden { display: none !important; }
+
+    /* Sidebar */
+    #sidebar {
+      width: 270px; min-width: 270px; height: 100%;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--sw-border);
+      display: flex; flex-direction: column; overflow-y: auto; z-index: 20;
+    }
+
+    .sidebar-brand {
+      padding: 1rem 1.25rem 0.85rem;
+      border-bottom: 1px solid var(--sw-border);
+      background: rgba(163, 0, 0, 0.04);
+      display: flex; align-items: center; gap: 0.6rem;
+    }
+    .sidebar-brand-name {
+      font-family: var(--sw-font-h); font-weight: 800; font-size: 1.15rem;
+      color: var(--sw-white); letter-spacing: 1px; line-height: 1;
+    }
+    .brand-accent { color: var(--sw-red); }
+    .sidebar-sub {
+      font-family: var(--sw-font-m); font-size: 0.55rem; letter-spacing: 0.15em;
+      color: rgba(163, 0, 0, 0.7); text-transform: uppercase; margin-top: 2px;
+    }
+
+    .sw-section {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--sw-border);
+      display: flex; flex-direction: column; gap: 0.75rem;
+    }
+    .sw-section-title {
+      font-family: var(--sw-font-m); font-size: 0.58rem; letter-spacing: 0.18em;
+      text-transform: uppercase; color: rgba(163, 0, 0, 0.7);
+    }
+
+    /* Field */
+    .sw-field { display: flex; flex-direction: column; gap: 0.35rem; }
+    .sw-field .sw-label { margin-bottom: 0; }
+    .sw-field input[type="text"] {
+      width: 100%; background: var(--sw-dark); border: 1px solid var(--sw-border);
+      color: var(--sw-white); font-family: var(--sw-font-b); font-size: 0.82rem;
+      padding: 0.55rem 0.8rem; outline: none;
+      clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+      transition: border-color 0.2s;
+    }
+    .sw-field input[type="text"]:focus { border-color: var(--sw-red); }
+    .sw-field input[type="range"] { accent-color: var(--sw-red); width: 100%; }
+
+    .sw-range-label {
+      font-family: var(--sw-font-m); font-size: 0.6rem; letter-spacing: 0.1em;
+      color: rgba(var(--text-primary-rgb), 0.5);
+      display: flex; justify-content: space-between;
+    }
+    .sw-range-label b { color: var(--sw-white); }
+
+    /* Tool buttons */
+    .sw-tool-btn {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.6rem 0.9rem;
+      background: transparent; border: 1px solid var(--sw-border);
+      color: rgba(var(--text-primary-rgb), 0.7);
+      font-family: var(--sw-font-m); font-size: 0.7rem;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      cursor: pointer;
+      clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+      transition: all 0.15s ease; width: 100%; text-align: left;
+    }
+    .sw-tool-btn i { width: 14px; text-align: center; color: var(--sw-red); }
+    .sw-tool-btn:hover { background: rgba(163, 0, 0, 0.06); border-color: var(--sw-red); color: var(--sw-white); }
+    .sw-tool-btn.active { background: rgba(163, 0, 0, 0.12); border-color: var(--sw-red); color: var(--sw-white); }
+    .sw-tool-btn.danger:hover { background: rgba(239, 68, 68, 0.08); border-color: rgba(239,68,68,0.5); color: #f87171; }
+    .sw-tool-btn.danger.active { background: rgba(239, 68, 68, 0.12); border-color: rgba(239,68,68,0.5); color: #f87171; }
+    .sw-tool-btn.success:hover { background: rgba(34, 197, 94, 0.08); border-color: rgba(34,197,94,0.4); color: #4ade80; }
+
+    .sw-point-count {
+      font-family: var(--sw-font-m); font-size: 0.58rem; letter-spacing: 0.1em;
+      color: rgba(var(--text-primary-rgb), 0.3); text-align: center; padding-top: 2px;
+    }
+
+    /* Status bar */
+    .sw-status {
+      margin-top: auto;
+      padding: 0.8rem 1.25rem;
+      border-top: 1px solid var(--sw-border);
+      background: rgba(163, 0, 0, 0.03);
+      font-family: var(--sw-font-m); font-size: 0.65rem; letter-spacing: 0.07em;
+      color: rgba(var(--text-primary-rgb), 0.4);
+      display: flex; align-items: center; gap: 0.5rem; min-height: 44px;
+    }
+    .sw-status .sw-pulse { flex-shrink: 0; }
+    .sw-status.ok { color: #4ade80; }
+    .sw-status.err { color: #f87171; }
+    .sw-status.info { color: rgba(var(--text-primary-rgb), 0.5); }
+
+    /* Canvas area */
+    #canvas-area {
+      flex: 1; position: relative; overflow: hidden;
+      background: var(--bg-primary);
+    }
+    #track-canvas { display: block; }
+
+    /* Canvas hint bar */
+    #canvas-hint {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; align-items: center;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
+      border: 1px solid var(--sw-border);
+      clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+      padding: 0.45rem 1rem;
+      font-family: var(--sw-font-m); font-size: 0.6rem; letter-spacing: 0.08em;
+      color: rgba(var(--text-primary-rgb), 0.4);
+      pointer-events: none; white-space: nowrap;
+    }
+    #canvas-hint kbd {
+      background: rgba(163, 0, 0, 0.15); border: 1px solid var(--sw-border);
+      padding: 1px 6px; font-family: var(--sw-font-m); font-size: 0.58rem;
+      color: rgba(var(--text-primary-rgb), 0.7);
+    }
+    .hint-sep { opacity: .25; }
+
+    /* Point info panel */
+    #point-info {
+      position: absolute; bottom: 14px; right: 14px;
+      background: rgba(0,0,0,0.85); backdrop-filter: blur(8px);
+      border: 1px solid var(--sw-border);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      padding: 1rem; min-width: 190px; display: none;
+    }
+    #point-info.visible { display: block; }
+    #point-info .sw-section-title { margin-bottom: 0.6rem; }
+    .pi-row { display: flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
+    .pi-row label { font-family: var(--sw-font-m); font-size: 0.6rem; color: rgba(163,0,0,0.7); width: 12px; }
+    .pi-row input {
+      flex: 1; background: var(--sw-dark); border: 1px solid var(--sw-border);
+      color: var(--sw-white); font-family: var(--sw-font-m); font-size: 0.75rem;
+      padding: 0.3rem 0.5rem; outline: none;
+      clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+    }
+    .pi-row input:focus { border-color: var(--sw-red); }
+
+    /* Zoom indicator */
+    #zoom-indicator {
+      position: absolute; bottom: 14px; left: 14px;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(6px);
+      border: 1px solid var(--sw-border);
+      padding: 0.3rem 0.8rem;
+      font-family: var(--sw-font-m); font-size: 0.6rem;
+      letter-spacing: 0.1em; color: rgba(var(--text-primary-rgb), 0.4);
+      clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--sw-border); }
+
+    /* Select táctico */
+    .sw-input[type], select.sw-input {
+      appearance: none; -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23A30000'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.7rem center;
+      padding-right: 1.8rem;
+    }
+    select.sw-input option { background: #121212; color: #F5F5F5; }
+  </style>
+</head>
+<body class="tac-page">
+
+  <!-- Efectos de fondo -->
+  <div class="sw-scanlines"></div>
+  <div class="noise-overlay"></div>
+
+  <!-- HUD Corners -->
+  <div class="hud-corner hud-tl"><div class="hud-line h"></div><div class="hud-line v"></div></div>
+  <div class="hud-corner hud-tr" style="transform:scaleX(-1)"><div class="hud-line h"></div><div class="hud-line v" style="left:auto;right:0"></div></div>
+  <div class="hud-corner hud-bl" style="transform:scaleY(-1)"><div class="hud-line h" style="top:auto;bottom:0"></div><div class="hud-line v"></div></div>
+  <div class="hud-corner hud-br" style="transform:scale(-1)"><div class="hud-line h" style="top:auto;bottom:0"></div><div class="hud-line v" style="left:auto;right:0"></div></div>
+
+  <!-- ── LOGIN SCREEN ── -->
+  <div id="login-screen">
+    <div class="sw-auth-wrap">
+      <div class="sw-auth-panel">
+
+        <!-- Terminal dots header -->
+        <div class="sw-auth-header">
+          <div class="sw-auth-dot r"></div>
+          <div class="sw-auth-dot y"></div>
+          <div class="sw-auth-dot g"></div>
+          <span class="sw-modal__label">ADMIN — ACCESO RESTRINGIDO</span>
+        </div>
+
+        <div class="sw-auth-body">
+          <h2 class="sw-auth-title">EDITOR<br><span class="brand-accent">DE NIVELES</span></h2>
+          <p class="sw-auth-sub">// Ingresá tu token de administrador para acceder</p>
+
+          <div class="sw-form-group">
+            <label class="sw-label" for="login-token">// TOKEN DE ACCESO</label>
+            <input class="sw-input" type="password" id="login-token" placeholder="••••••••••••" autocomplete="current-password" />
+          </div>
+
+          <div id="login-error" class="sw-alert hidden"></div>
+
+          <button id="login-btn" class="sw-btn sw-btn--primary sw-btn--full">
+            <i class="fa fa-right-to-bracket"></i> INGRESAR
+          </button>
+
+          <div style="margin-top:1.5rem; text-align:center">
+            <a href="/" class="sw-link-btn" style="font-size:0.65rem">
+              <i class="fa fa-arrow-left"></i> Volver al Portal
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── EDITOR SCREEN ── -->
+  <div id="editor-screen" class="hidden">
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+
+      <!-- Brand -->
+      <div class="sidebar-brand">
+        <div>
+          <div class="sidebar-brand-name">Spider<span class="brand-accent">Kart</span></div>
+          <div class="sidebar-sub">// Level Editor v1.0</div>
+        </div>
+      </div>
+
+      <!-- Nivel -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Nivel</div>
+        <div class="sw-field">
+          <label class="sw-label" for="level-name">Nombre</label>
+          <input type="text" id="level-name" value="Circuito Variado Grande" />
+        </div>
+        <div class="sw-field">
+          <div class="sw-range-label">
+            <span>Ancho de pista</span>
+            <b id="track-width-val">14</b> u
+          </div>
+          <input type="range" id="track-width" min="5" max="30" step="1" value="14" />
+        </div>
+      </div>
+
+      <!-- Herramientas de pista -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Pista</div>
+        <button class="sw-tool-btn" id="tool-add">
+          <i class="fa fa-plus-circle"></i> Añadir punto
+        </button>
+        <button class="sw-tool-btn active" id="tool-move">
+          <i class="fa fa-arrows-alt"></i> Mover punto
+        </button>
+        <button class="sw-tool-btn danger" id="tool-delete">
+          <i class="fa fa-times-circle"></i> Eliminar punto
+        </button>
+        <p class="sw-point-count" id="point-count">0 puntos de control</p>
+      </div>
+
+      <!-- Obstáculos -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Obstáculos</div>
+        <div class="sw-field">
+          <label class="sw-label" for="obs-type">Tipo</label>
+          <select id="obs-type" class="sw-input" style="padding:0.4rem 0.6rem;">
+            <option value="0">Barril de Picos (Rosa)</option>
+            <option value="1">Cristal Láser (Cyan)</option>
+            <option value="2">Huevo Araña (Violeta)</option>
+          </select>
+        </div>
+        <button class="sw-tool-btn" id="tool-obs-add">
+          <i class="fa fa-plus-circle"></i> Añadir obstáculo
+        </button>
+        <button class="sw-tool-btn danger" id="tool-obs-delete">
+          <i class="fa fa-times-circle"></i> Eliminar obstáculo
+        </button>
+        <p class="sw-point-count" id="obs-count">0 obstáculos</p>
+      </div>
+
+      <!-- Rampas -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Rampas</div>
+        <div class="sw-field">
+          <label class="sw-label" for="ramp-type">Color</label>
+          <select id="ramp-type" class="sw-input" style="padding:0.4rem 0.6rem;">
+            <option value="gold">🟠 Dorada</option>
+            <option value="cyan">🟦 Cyan</option>
+          </select>
+        </div>
+        <button class="sw-tool-btn" id="tool-ramp-add">
+          <i class="fa fa-plus-circle"></i> Añadir rampa
+        </button>
+        <button class="sw-tool-btn danger" id="tool-ramp-delete">
+          <i class="fa fa-times-circle"></i> Eliminar rampa
+        </button>
+        <p class="sw-point-count" id="ramp-count">0 rampas</p>
+      </div>
+
+      <!-- Orbes (Power-ups) -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Orbes</div>
+        <div class="sw-field">
+          <label class="sw-label" for="pu-type">Tipo</label>
+          <select id="pu-type" class="sw-input" style="padding:0.4rem 0.6rem;">
+            <option value="missile">🟢 Misil Verde</option>
+            <option value="homing">🔴 Misil Teledirigido</option>
+            <option value="boost">🟡 Turbo</option>
+          </select>
+        </div>
+        <button class="sw-tool-btn" id="tool-pu-add">
+          <i class="fa fa-plus-circle"></i> Añadir orbe
+        </button>
+        <button class="sw-tool-btn danger" id="tool-pu-delete">
+          <i class="fa fa-times-circle"></i> Eliminar orbe
+        </button>
+        <p class="sw-point-count" id="pu-count">0 orbes</p>
+      </div>
+
+      <!-- Acciones -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Acciones</div>
+        <button class="sw-tool-btn success" id="btn-save">
+          <i class="fa fa-cloud-upload-alt"></i> Guardar nivel
+        </button>
+        <button class="sw-tool-btn" id="btn-load">
+          <i class="fa fa-download"></i> Cargar desde servidor
+        </button>
+        <button class="sw-tool-btn danger" id="btn-reset">
+          <i class="fa fa-undo"></i> Resetear al default
+        </button>
+        <button class="sw-tool-btn danger" id="btn-clear">
+          <i class="fa fa-trash"></i> Limpiar todo
+        </button>
+      </div>
+
+      <!-- Accesos rápidos -->
+      <div class="sw-section">
+        <div class="sw-section-title">// Accesos Rápidos</div>
+        <a href="/game.html" target="_blank" class="sw-tool-btn" style="text-decoration:none">
+          <i class="fa fa-gamepad"></i> Ir al Juego
+        </a>
+        <a href="/" target="_blank" class="sw-tool-btn" style="text-decoration:none">
+          <i class="fa fa-home"></i> Portal Principal
+        </a>
+      </div>
+
+      <!-- Status -->
+      <div class="sw-status info" id="status-bar">
+        <span class="sw-pulse"></span>
+        <span id="status-text">Iniciando editor...</span>
+      </div>
+    </aside>
+
+    <!-- Canvas area -->
+    <div id="canvas-area">
+      <canvas id="track-canvas"></canvas>
+
+      <!-- Hint bar -->
+      <div id="canvas-hint">
+        <kbd>Click</kbd> añadir
+        <span class="hint-sep">|</span>
+        <kbd>Drag</kbd> mover
+        <span class="hint-sep">|</span>
+        <kbd>Scroll</kbd> zoom
+        <span class="hint-sep">|</span>
+        <kbd>Space+Drag</kbd> paneo
+        <span class="hint-sep">|</span>
+        <kbd>Del</kbd> borrar seleccionado
+      </div>
+
+      <!-- Point info -->
+      <div id="point-info">
+        <div class="sw-section-title"><i class="fa fa-map-pin"></i> &nbsp;PUNTO SELECCIONADO</div>
+        <div class="pi-row">
+          <label>X</label>
+          <input type="number" id="pi-x" step="1" />
+        </div>
+        <div class="pi-row">
+          <label>Z</label>
+          <input type="number" id="pi-z" step="1" />
+        </div>
+      </div>
+
+      <!-- Zoom -->
+      <div id="zoom-indicator">ZOOM: <span id="zoom-val">100%</span></div>
+    </div>
+
+  </div><!-- /#editor-screen -->
+
+  <script src="/js/editor.js"></script>
+</body>
+</html>

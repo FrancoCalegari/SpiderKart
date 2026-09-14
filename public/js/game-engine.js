@@ -96,13 +96,14 @@
   scene.add(redLight);
 
   /* ──────────────────────────────────────────
-     Track path — circuito variado grande
+     Track path — se carga desde /api/level
+     (fallback: circuito variado grande)
   ────────────────────────────────────────── */
   const WORLD_SCALE = 1.8;
-  const HALF_WIDTH = 14;
+  let HALF_WIDTH = 14;
   const BARRIER_GAP = 1.5;
 
-  const controlPoints = [
+  const DEFAULT_CONTROL_POINTS = [
     [ 160,   0],
     [ 160, -70],
     [ 150, -140],
@@ -122,19 +123,25 @@
     [  90, 140],
     [ 140, 110],
     [ 160,  60]
-  ].map(([x, z]) => new THREE.Vector3(x * WORLD_SCALE, 0, z * WORLD_SCALE));
+  ];
 
-  const trackCurve = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal', 0.5);
+  let controlPoints = DEFAULT_CONTROL_POINTS.map(([x, z]) => new THREE.Vector3(x * WORLD_SCALE, 0, z * WORLD_SCALE));
+  let trackCurve    = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal', 0.5);
 
   const TRACK_SAMPLES = 600;
-  const trackSamples = [];
-  for (let i = 0; i <= TRACK_SAMPLES; i++) {
-    const t = i / TRACK_SAMPLES;
-    const p = trackCurve.getPointAt(t);
-    const tan = trackCurve.getTangentAt(t).clone().normalize();
-    const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
-    trackSamples.push({ x: p.x, z: p.z, tan, normal, t });
+  let trackSamples = [];
+
+  function sampleTrack() {
+    trackSamples.length = 0;
+    for (let i = 0; i <= TRACK_SAMPLES; i++) {
+      const t = i / TRACK_SAMPLES;
+      const p = trackCurve.getPointAt(t);
+      const tan = trackCurve.getTangentAt(t).clone().normalize();
+      const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
+      trackSamples.push({ x: p.x, z: p.z, tan, normal, t });
+    }
   }
+  sampleTrack();
 
   function offsetCurve(dist) {
     const pts = trackSamples.map(s => new THREE.Vector3(
@@ -151,19 +158,47 @@
       color: 0x140912, roughness: 1, metalness: 0,
       emissive: 0x22040a, emissiveIntensity: 0.25
     });
-    // El tráfico del circuito llega hasta ~190 * WORLD_SCALE = 342 unidades.
-    // Las montañas se colocan a partir de 500 unidades para no invadir la pista.
-    for (let i = 0; i < 40; i++) {
-      const a = (i / 40) * Math.PI * 2 + (Math.random() - 0.5) * 0.15;
-      const r = 500 + Math.random() * 250; // Fuera del área de la pista
+    // Calcular bounding box de la pista para saber dónde NO colocar montañas
+    const MIN_DIST_FROM_TRACK = 80; // unidades de mundo
+    const MIN_DIST_SQ = MIN_DIST_FROM_TRACK * MIN_DIST_FROM_TRACK;
+    // Usamos una versión sparse de trackSamples (cada 20 muestras) para rendimiento
+    const sparseSamples = trackSamples.filter((_, i) => i % 20 === 0);
+
+    function isTooCloseToTrack(px, pz) {
+      for (const s of sparseSamples) {
+        const dx = px - s.x, dz = pz - s.z;
+        if (dx * dx + dz * dz < MIN_DIST_SQ) return true;
+      }
+      return false;
+    }
+
+    // Calcular radio exterior de la pista para colocar montañas
+    let maxTrackRadius = 0;
+    for (const s of sparseSamples) {
+      const r = Math.sqrt(s.x * s.x + s.z * s.z);
+      if (r > maxTrackRadius) maxTrackRadius = r;
+    }
+    const MIN_RADIUS = maxTrackRadius + MIN_DIST_FROM_TRACK;
+    const MAX_RADIUS = MIN_RADIUS + 400;
+
+    let placed = 0;
+    let attempts = 0;
+    while (placed < 40 && attempts < 300) {
+      attempts++;
+      const a = Math.random() * Math.PI * 2;
+      const r = MIN_RADIUS + Math.random() * (MAX_RADIUS - MIN_RADIUS);
+      const px = Math.cos(a) * r;
+      const pz = Math.sin(a) * r;
+      if (isTooCloseToTrack(px, pz)) continue;
       const h = 32 + Math.random() * 60;
       const rad = 22 + Math.random() * 30;
       const geo = new THREE.ConeGeometry(rad, h, 6);
       const m = new THREE.Mesh(geo, mountMat);
-      m.position.set(Math.cos(a) * r, h / 2 - 3, Math.sin(a) * r);
+      m.position.set(px, h / 2 - 3, pz);
       m.rotation.y = Math.random() * Math.PI;
       m.receiveShadow = true;
       group.add(m);
+      placed++;
     }
   }
 
@@ -212,6 +247,8 @@
     });
     return new THREE.Mesh(geo, mat);
   }
+
+  let _trackGroup = null; // referencia al grupo de la pista en la escena
 
   function buildTrack() {
     const group = new THREE.Group();
@@ -281,8 +318,67 @@
 
     addMountains(group);
     scene.add(group);
+    _trackGroup = group;
   }
   buildTrack();
+
+  /* ──────────────────────────────────────────
+     Carga dinámica del nivel desde /api/level
+  ────────────────────────────────────────── */
+  function rebuildTrackFromData(rawPoints, halfWidth, levelObstacles, levelRamps, levelPowerups) {
+    HALF_WIDTH = halfWidth || 14;
+    controlPoints = rawPoints.map(p => {
+      const [x, z] = Array.isArray(p) ? p : [p.x, p.z];
+      return new THREE.Vector3(x * WORLD_SCALE, 0, z * WORLD_SCALE);
+    });
+    trackCurve = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal', 0.5);
+    sampleTrack();
+    updateMinimapBounds();
+    if (_trackGroup) scene.remove(_trackGroup);
+    buildTrack();
+    for (const obs of obstacles) { scene.remove(obs.mesh); scene.remove(obs.light); }
+    obstacles.length = 0;
+    for (const ramp of ramps) { scene.remove(ramp.mesh); scene.remove(ramp.light); }
+    ramps.length = 0;
+    for (const pu of powerups) scene.remove(pu.mesh);
+    powerups.length = 0;
+    buildObstacles(levelObstacles || null);
+    buildRamps(levelRamps || null);
+    buildPowerups(levelPowerups || null);
+    if (typeof kartGroup !== 'undefined') {
+      const s0 = trackSamples[0];
+      kartGroup.position.set(s0.x, 0, s0.z);
+    }
+    if (window.SpiderKart) {
+      window.SpiderKart.trackHalfWidth = HALF_WIDTH;
+      const s0 = trackSamples[0];
+      window.SpiderKart.startPoint = { x: s0.x, z: s0.z, angle: Math.atan2(s0.tan.z, s0.tan.x) };
+    }
+    console.log('[Level] Pista reconstruida con nivel personalizado.');
+  }
+
+  fetch('/api/level')
+    .then(r => r.json())
+    .then(data => {
+      if (!data || !Array.isArray(data.controlPoints) || data.controlPoints.length < 3) return;
+      const isDifferent = JSON.stringify(data.controlPoints) !== JSON.stringify(DEFAULT_CONTROL_POINTS);
+      if (isDifferent || data.obstacles || data.ramps || data.powerups) {
+        rebuildTrackFromData(data.controlPoints, data.trackWidth, data.obstacles, data.ramps, data.powerups);
+      } else if (data.obstacles || data.ramps || data.powerups) {
+        for (const obs of obstacles) { scene.remove(obs.mesh); scene.remove(obs.light); }
+        obstacles.length = 0;
+        for (const ramp of ramps) { scene.remove(ramp.mesh); scene.remove(ramp.light); }
+        ramps.length = 0;
+        for (const pu of powerups) scene.remove(pu.mesh);
+        powerups.length = 0;
+        buildObstacles(data.obstacles || null);
+        buildRamps(data.ramps || null);
+        buildPowerups(data.powerups || null);
+      }
+    })
+    .catch(() => {
+      console.warn('[Level] No se pudo cargar el nivel desde /api/level, usando circuito default.');
+    });
 
   /* ──────────────────────────────────────────
      Obstáculos variados y aleatorizados en la pista
@@ -291,101 +387,73 @@
   const OBSTACLE_RESPAWN = 7.0; // Segundos para regenerarse tras ser destruido
   const obstacles = [];
 
-  function buildObstacles() {
+  function buildObstacles(levelData) {
     // Geometrías para 3 tipos distintos de obstáculos
     const barrelBaseGeo = new THREE.CylinderGeometry(0.8, 1.1, 1.3, 8);
     const spikeGeo      = new THREE.OctahedronGeometry(0.65, 0);
-
     const crystalBaseGeo = new THREE.ConeGeometry(1.0, 0.6, 6);
     const crystalGeo     = new THREE.OctahedronGeometry(0.8, 0);
-
     const eggBaseGeo = new THREE.SphereGeometry(0.9, 8, 8);
     eggBaseGeo.scale(1, 0.6, 1);
     const eggCoreGeo = new THREE.IcosahedronGeometry(0.5, 0);
 
-    // Materiales neón
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x111122, roughness: 0.5, metalness: 0.8 });
-    const matPink = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0033, emissiveIntensity: 1.8, roughness: 0.2 });
-    const matCyan = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00b4d8, emissiveIntensity: 1.9, roughness: 0.2 });
+    const darkMat   = new THREE.MeshStandardMaterial({ color: 0x111122, roughness: 0.5, metalness: 0.8 });
+    const matPink   = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0033, emissiveIntensity: 1.8, roughness: 0.2 });
+    const matCyan   = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00b4d8, emissiveIntensity: 1.9, roughness: 0.2 });
     const matPurple = new THREE.MeshStandardMaterial({ color: 0x9900ff, emissive: 0x7700cc, emissiveIntensity: 2.0, roughness: 0.2 });
 
-    let currentIdx = 25;
-    for (let i = 0; i < OBSTACLE_COUNT; i++) {
-      // Separación aleatorizada entre obstáculos
-      currentIdx += Math.floor(16 + Math.random() * 22);
-      if (currentIdx >= TRACK_SAMPLES - 35) break;
-
-      const s = trackSamples[currentIdx];
-      // Desplazamiento lateral completamente aleatorizado en el ancho de la pista
-      const side = (Math.random() < 0.5 ? 1 : -1);
-      const laneFrac = 0.15 + Math.random() * 0.65;
-      const lateral = side * (HALF_WIDTH * laneFrac);
+    function spawnObstacle(sampleIdx, lane, type) {
+      sampleIdx = Math.min(sampleIdx, TRACK_SAMPLES - 1);
+      const s = trackSamples[sampleIdx];
+      const lateral = lane * HALF_WIDTH;
       const ox = s.x + s.normal.x * lateral;
       const oz = s.z + s.normal.z * lateral;
-
-      const type = i % 3; // 0: Barril, 1: Cristal Neón, 2: Mina Araña
       const group = new THREE.Group();
       let spikeMesh = null;
       let lightColor = 0xff0055;
-
-      if (type === 0) {
-        // Tipo 1: Barril de Picos
-        const base = new THREE.Mesh(barrelBaseGeo, darkMat);
-        base.position.y = 0.65;
-        base.castShadow = true;
-        spikeMesh = new THREE.Mesh(spikeGeo, matPink);
-        spikeMesh.position.y = 1.5;
-        spikeMesh.castShadow = true;
-        group.add(base, spikeMesh);
-        lightColor = 0xff0055;
-      } else if (type === 1) {
-        // Tipo 2: Cristal de Láser Neón
-        const base = new THREE.Mesh(crystalBaseGeo, darkMat);
-        base.position.y = 0.3;
-        base.castShadow = true;
-        spikeMesh = new THREE.Mesh(crystalGeo, matCyan);
-        spikeMesh.position.y = 1.3;
-        spikeMesh.scale.set(0.9, 1.4, 0.9);
-        spikeMesh.castShadow = true;
-        group.add(base, spikeMesh);
-        lightColor = 0x00e5ff;
+      const t = ((type % 3) + 3) % 3;
+      if (t === 0) {
+        const base = new THREE.Mesh(barrelBaseGeo, darkMat); base.position.y = 0.65; base.castShadow = true;
+        spikeMesh = new THREE.Mesh(spikeGeo, matPink); spikeMesh.position.y = 1.5; spikeMesh.castShadow = true;
+        group.add(base, spikeMesh); lightColor = 0xff0055;
+      } else if (t === 1) {
+        const base = new THREE.Mesh(crystalBaseGeo, darkMat); base.position.y = 0.3; base.castShadow = true;
+        spikeMesh = new THREE.Mesh(crystalGeo, matCyan); spikeMesh.position.y = 1.3; spikeMesh.scale.set(0.9, 1.4, 0.9); spikeMesh.castShadow = true;
+        group.add(base, spikeMesh); lightColor = 0x00e5ff;
       } else {
-        // Tipo 3: Huevo de Araña / Mina
-        const base = new THREE.Mesh(eggBaseGeo, darkMat);
-        base.position.y = 0.45;
-        base.castShadow = true;
-        spikeMesh = new THREE.Mesh(eggCoreGeo, matPurple);
-        spikeMesh.position.y = 1.1;
-        spikeMesh.castShadow = true;
-        group.add(base, spikeMesh);
-        lightColor = 0x9900ff;
+        const base = new THREE.Mesh(eggBaseGeo, darkMat); base.position.y = 0.45; base.castShadow = true;
+        spikeMesh = new THREE.Mesh(eggCoreGeo, matPurple); spikeMesh.position.y = 1.1; spikeMesh.castShadow = true;
+        group.add(base, spikeMesh); lightColor = 0x9900ff;
       }
-
-      // Variación aleatoria de escala y rotación
       const randScale = 0.85 + Math.random() * 0.35;
       group.scale.setScalar(randScale);
       group.rotation.y = Math.random() * Math.PI * 2;
       group.position.set(ox, 0, oz);
       scene.add(group);
-
       const light = new THREE.PointLight(lightColor, 1.5, 6);
       light.position.set(ox, 1.5, oz);
       scene.add(light);
-
       obstacles.push({
-        mesh: group,
-        spike: spikeMesh,
-        light: light,
-        x: ox,
-        z: oz,
-        height: 1.9 * randScale,
-        radius: 1.7 * randScale,
-        color: lightColor,
-        active: true,
-        respawnTimer: 0,
-        sampleIdx: currentIdx,
-        lateral: lateral
+        mesh: group, spike: spikeMesh, light,
+        x: ox, z: oz, height: 1.9 * randScale, radius: 1.7 * randScale,
+        color: lightColor, active: true, respawnTimer: 0,
+        sampleIdx, lateral, lane, type: t
       });
+    }
+
+    if (levelData && Array.isArray(levelData)) {
+      // Datos definidos en el nivel
+      for (const d of levelData) spawnObstacle(d.sampleIdx, d.lane, d.type || 0);
+    } else {
+      // Generación procedural por defecto
+      let currentIdx = 25;
+      for (let i = 0; i < OBSTACLE_COUNT; i++) {
+        currentIdx += Math.floor(16 + Math.random() * 22);
+        if (currentIdx >= TRACK_SAMPLES - 35) break;
+        const side = (Math.random() < 0.5 ? 1 : -1);
+        const laneFrac = 0.15 + Math.random() * 0.65;
+        spawnObstacle(currentIdx, side * laneFrac, i % 3);
+      }
     }
   }
   buildObstacles();
@@ -505,32 +573,33 @@
     return group;
   }
 
-  function buildRamps() {
-    // 8 rampas colocadas estratégicamente en rectas, curvas y carriles alternativos
-    // independientes de los obstáculos para que los obstáculos mantengan su dificultad
-    const rampConfigs = [
-      { sampleIdx: 45,  lane: 0.0,   type: 'gold' }, // Recta de inicio: rampa central de despegue
-      { sampleIdx: 120, lane: 0.45,  type: 'cyan' }, // Curva abierta: rampa en carril exterior
-      { sampleIdx: 190, lane: -0.4,  type: 'gold' }, // Tramo intermedio: carril interior
-      { sampleIdx: 260, lane: 0.0,   type: 'cyan' }, // Gran salto en recta técnica
-      { sampleIdx: 330, lane: 0.4,   type: 'gold' }, // Salida de curva amplia
-      { sampleIdx: 400, lane: -0.45, type: 'cyan' }, // Desafío en chicane rápida
-      { sampleIdx: 475, lane: 0.0,   type: 'gold' }, // Salto central en sector veloz
-      { sampleIdx: 545, lane: 0.35,  type: 'cyan' }  // Rampa previa a recta final
+  function buildRamps(levelData) {
+    const DEFAULT_RAMP_CONFIGS = [
+      { sampleIdx: 45,  lane: 0.0,   type: 'gold' },
+      { sampleIdx: 120, lane: 0.45,  type: 'cyan' },
+      { sampleIdx: 190, lane: -0.4,  type: 'gold' },
+      { sampleIdx: 260, lane: 0.0,   type: 'cyan' },
+      { sampleIdx: 330, lane: 0.4,   type: 'gold' },
+      { sampleIdx: 400, lane: -0.45, type: 'cyan' },
+      { sampleIdx: 475, lane: 0.0,   type: 'gold' },
+      { sampleIdx: 545, lane: 0.35,  type: 'cyan' }
     ];
 
-    for (let i = 0; i < rampConfigs.length; i++) {
-      const cfg = rampConfigs[i];
-      const s = trackSamples[cfg.sampleIdx];
-      let lateral = cfg.lane * (HALF_WIDTH - 3.5);
+    const configs = (levelData && Array.isArray(levelData))
+      ? levelData
+      : DEFAULT_RAMP_CONFIGS;
+
+    for (const cfg of configs) {
+      const sampleIdx = Math.min(cfg.sampleIdx, TRACK_SAMPLES - 1);
+      const s = trackSamples[sampleIdx];
+      let lateral = (cfg.lane || 0) * (HALF_WIDTH - 3.5);
 
       let rx = s.x + s.normal.x * lateral;
       let rz = s.z + s.normal.z * lateral;
 
-      // Garantizar que no coincida ni bloquee directamente ningún obstáculo
+      // Evitar colisión directa con obstáculos
       for (const obs of obstacles) {
-        const dx = rx - obs.x;
-        const dz = rz - obs.z;
+        const dx = rx - obs.x, dz = rz - obs.z;
         if (dx * dx + dz * dz < 100) {
           lateral = -lateral;
           if (Math.abs(lateral) < 1.0) lateral = HALF_WIDTH * 0.45;
@@ -553,19 +622,13 @@
       scene.add(light);
 
       ramps.push({
-        mesh,
-        light,
-        x: rx,
-        z: rz,
-        tanX: s.tan.x,
-        tanZ: s.tan.z,
-        normX: s.normal.x,
-        normZ: s.normal.z,
-        width: RAMP_WIDTH,
-        length: RAMP_LENGTH,
-        height: RAMP_HEIGHT,
-        angle,
-        recentlyLaunched: false
+        mesh, light,
+        x: rx, z: rz,
+        tanX: s.tan.x, tanZ: s.tan.z,
+        normX: s.normal.x, normZ: s.normal.z,
+        width: RAMP_WIDTH, length: RAMP_LENGTH, height: RAMP_HEIGHT,
+        angle, recentlyLaunched: false,
+        sampleIdx, lane: cfg.lane || 0, type: cfg.type || 'gold'
       });
     }
   }
@@ -687,68 +750,70 @@
   const POWERUP_PICKUP_RADIUS = 2.5;
   const powerups = [];
 
-  function buildPowerups() {
+  function buildPowerups(levelData) {
     const boxGeo = new THREE.OctahedronGeometry(0.75, 0);
     const ringGeo = new THREE.TorusGeometry(1.1, 0.06, 8, 20);
 
     const materials = {
-      missile: { // Verde
-        gem: new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00cc44, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.6 }),
+      missile: {
+        gem:  new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00cc44, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.6 }),
         ring: new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 1.5, transparent: true, opacity: 0.6 })
       },
-      homing: { // Rojo
-        gem: new THREE.MeshStandardMaterial({ color: 0xff2244, emissive: 0xcc0022, emissiveIntensity: 1.5, roughness: 0.25, metalness: 0.6 }),
+      homing: {
+        gem:  new THREE.MeshStandardMaterial({ color: 0xff2244, emissive: 0xcc0022, emissiveIntensity: 1.5, roughness: 0.25, metalness: 0.6 }),
         ring: new THREE.MeshStandardMaterial({ color: 0xff2244, emissive: 0xff2244, emissiveIntensity: 1.5, transparent: true, opacity: 0.6 })
       },
-      boost: { // Amarillo
-        gem: new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xff9500, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.6 }),
+      boost: {
+        gem:  new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xff9500, emissiveIntensity: 1.4, roughness: 0.25, metalness: 0.6 }),
         ring: new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 1.5, transparent: true, opacity: 0.6 })
       }
     };
 
-    const types = ['missile', 'homing', 'boost'];
-
-    for (let i = 0; i < POWERUP_COUNT; i++) {
-      // Offset longitudinal respecto a los obstáculos para evitar coincidencias
-      const frac = ((i + 0.18) / POWERUP_COUNT) % 1;
-      const s = trackSamples[Math.floor(frac * TRACK_SAMPLES)];
-      const lane = [0, 0.65, -0.65, 0.35, -0.35][i % 5];
+    function spawnPowerup(sampleIdx, lane, type) {
+      sampleIdx = Math.min(sampleIdx, TRACK_SAMPLES - 1);
+      const s = trackSamples[sampleIdx];
       let lateral = lane * (HALF_WIDTH - 3.5);
-
       let px = s.x + s.normal.x * lateral;
       let pz = s.z + s.normal.z * lateral;
-
-      // Garantizar separación estricta con obstáculos (mínimo 10 unidades)
+      // Separación con obstáculos
       for (const obs of obstacles) {
-        const dx = px - obs.x;
-        const dz = pz - obs.z;
+        const dx = px - obs.x, dz = pz - obs.z;
         if (dx * dx + dz * dz < 100) {
           lateral = -lateral;
-          if (Math.abs(lateral) < 2) lateral = (HALF_WIDTH - 4.5);
+          if (Math.abs(lateral) < 2) lateral = HALF_WIDTH - 4.5;
           px = s.x + s.normal.x * lateral;
           pz = s.z + s.normal.z * lateral;
           break;
         }
       }
-
-      const type = types[i % 3];
-      const mats = materials[type];
-
+      const validType = ['missile','homing','boost'].includes(type) ? type : 'missile';
+      const mats = materials[validType];
       const group = new THREE.Group();
-      const gem = new THREE.Mesh(boxGeo, mats.gem);
+      const gem  = new THREE.Mesh(boxGeo, mats.gem);
       const ring = new THREE.Mesh(ringGeo, mats.ring);
       ring.rotation.x = Math.PI / 2;
       group.add(gem, ring);
       group.position.set(px, 1.3, pz);
       scene.add(group);
-
       powerups.push({
         mesh: group,
         basePos: new THREE.Vector3(px, 1.3, pz),
-        type,
-        active: true,
-        respawnTimer: 0
+        type: validType, active: true, respawnTimer: 0,
+        sampleIdx, lane
       });
+    }
+
+    if (levelData && Array.isArray(levelData)) {
+      for (const d of levelData) spawnPowerup(d.sampleIdx, d.lane, d.type);
+    } else {
+      const defaultTypes = ['missile', 'homing', 'boost'];
+      for (let i = 0; i < POWERUP_COUNT; i++) {
+        const frac = ((i + 0.18) / POWERUP_COUNT) % 1;
+        const s = trackSamples[Math.floor(frac * TRACK_SAMPLES)];
+        const lane = [0, 0.65, -0.65, 0.35, -0.35][i % 5];
+        const sampleIdx = Math.floor(frac * TRACK_SAMPLES);
+        spawnPowerup(sampleIdx, lane, defaultTypes[i % 3]);
+      }
     }
   }
   buildPowerups();
@@ -1613,12 +1678,24 @@
      Minimapa — pre-calculo de bounds y puntos
   ────────────────────────────────────────── */
   let mmMinX = Infinity, mmMaxX = -Infinity, mmMinZ = Infinity, mmMaxZ = -Infinity;
-  trackSamples.forEach(s => {
-    if (s.x < mmMinX) mmMinX = s.x; if (s.x > mmMaxX) mmMaxX = s.x;
-    if (s.z < mmMinZ) mmMinZ = s.z; if (s.z > mmMaxZ) mmMaxZ = s.z;
-  });
-  const mmPad = 10;
-  mmMinX -= mmPad; mmMaxX += mmPad; mmMinZ -= mmPad; mmMaxZ += mmPad;
+
+  function updateMinimapBounds() {
+    mmMinX = Infinity; mmMaxX = -Infinity; mmMinZ = Infinity; mmMaxZ = -Infinity;
+    trackSamples.forEach(s => {
+      if (s.x < mmMinX) mmMinX = s.x; if (s.x > mmMaxX) mmMaxX = s.x;
+      if (s.z < mmMinZ) mmMinZ = s.z; if (s.z > mmMaxZ) mmMaxZ = s.z;
+    });
+    // Mantener aspect ratio cuadrado para que la pista no se deforme
+    const rangeX = mmMaxX - mmMinX;
+    const rangeZ = mmMaxZ - mmMinZ;
+    const maxRange = Math.max(rangeX, rangeZ);
+    const cx = (mmMinX + mmMaxX) / 2;
+    const cz = (mmMinZ + mmMaxZ) / 2;
+    const pad = maxRange * 0.08 + 10;
+    mmMinX = cx - maxRange / 2 - pad; mmMaxX = cx + maxRange / 2 + pad;
+    mmMinZ = cz - maxRange / 2 - pad; mmMaxZ = cz + maxRange / 2 + pad;
+  }
+  updateMinimapBounds();
 
   function worldToMinimap(x, z) {
     const cw = minimapCanvas ? minimapCanvas.width  : 140;

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 
 dotenv.config();
 
@@ -28,6 +29,81 @@ app.use(express.static(join(__dirname, 'public')));
 const SPIDER_API_URL = 'https://spiderwebargapi.com.ar/api/v1';
 const SPIDER_API_KEY = process.env.spiderapikey;
 const SPIDER_DB_NAME = process.env.spiderdbname;
+
+// Admin
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+const LEVELS_FILE = join(__dirname, 'levels.json');
+
+const DEFAULT_LEVEL = {
+    name: 'Circuito Variado Grande',
+    trackWidth: 14,
+    controlPoints: [
+        [160,0],[160,-70],[150,-140],[110,-200],[50,-210],
+        [0,-180],[-40,-130],[-90,-150],[-140,-130],[-180,-80],
+        [-190,0],[-160,60],[-100,80],[-60,40],[-20,90],
+        [30,130],[90,140],[140,110],[160,60]
+    ]
+};
+
+// Middleware de autenticación para /admin
+function requireAdmin(req, res, next) {
+    const token = req.headers['x-admin-token'] || req.query.token;
+    if (token === ADMIN_TOKEN) return next();
+    res.status(401).json({ error: 'No autorizado. Token inválido.' });
+}
+
+// Helper: leer nivel desde SpiderWebARG DB (con fallback a levels.json local)
+async function readLevelData() {
+    // 1) Intentar desde la DB remota
+    try {
+        const result = await executeQuery(`SELECT level_json FROM spiderkart_levels ORDER BY updated_at DESC LIMIT 1`);
+        if (result.result && result.result.length > 0) {
+            return JSON.parse(result.result[0].level_json);
+        }
+    } catch (e) {
+        console.warn('[Level] DB no disponible, usando fallback local:', e.message);
+    }
+    // 2) Fallback a levels.json local
+    if (existsSync(LEVELS_FILE)) {
+        return JSON.parse(readFileSync(LEVELS_FILE, 'utf8'));
+    }
+    // 3) Hardcoded default
+    return DEFAULT_LEVEL;
+}
+
+// Helper: guardar nivel en SpiderWebARG DB (y local como backup)
+async function saveLevelData(levelData) {
+    const json = JSON.stringify(levelData);
+    let savedToDb = false;
+
+    // Intentar crear tabla si no existe
+    try {
+        await executeQuery(`
+            CREATE TABLE IF NOT EXISTS spiderkart_levels (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                level_json TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        `);
+        // Upsert: borrar y re-insertar (sencillo, solo hay 1 nivel activo)
+        await executeQuery(`DELETE FROM spiderkart_levels`);
+        await executeQuery(`INSERT INTO spiderkart_levels (level_json) VALUES ('${json.replace(/'/g, "''")}')`);
+        savedToDb = true;
+        console.log('[Level] Guardado en SpiderWebARG DB.');
+    } catch (e) {
+        console.warn('[Level] No se pudo guardar en DB, guardando solo local:', e.message);
+    }
+
+    // Siempre guardar en levels.json local como backup
+    try {
+        writeFileSync(LEVELS_FILE, JSON.stringify(levelData, null, 2), 'utf8');
+        console.log('[Level] Guardado en levels.json local.');
+    } catch (e) {
+        console.error('[Level] Error guardando levels.json:', e.message);
+    }
+
+    return savedToDb;
+}
 
 // Flag para suprimir errores repetitivos de la misma naturaleza
 let _dbErrorLogged = false;
@@ -61,6 +137,54 @@ async function executeQuery(query) {
     _dbErrorLogged = false;
     return await response.json();
 }
+
+// ---------------------------------------------------------
+// Rutas del Editor de Niveles (/admin)
+// ---------------------------------------------------------
+
+// Sirve la página del editor de niveles
+app.get('/admin', (req, res) => {
+    res.sendFile(join(__dirname, 'public', 'admin.html'));
+});
+
+// GET /api/level — obtener el nivel actual (público, lo necesita el juego)
+app.get('/api/level', async (req, res) => {
+    try {
+        const level = await readLevelData();
+        res.json(level);
+    } catch (error) {
+        console.error('[Level] Error leyendo nivel:', error);
+        res.json(DEFAULT_LEVEL);
+    }
+});
+
+// POST /api/level — guardar nuevo nivel (solo admin)
+app.post('/api/level', requireAdmin, async (req, res) => {
+    const { name, trackWidth, controlPoints } = req.body;
+
+    if (!controlPoints || !Array.isArray(controlPoints) || controlPoints.length < 3) {
+        return res.status(400).json({ error: 'El nivel necesita al menos 3 puntos de control.' });
+    }
+
+    const levelData = {
+        name: name || 'Nivel Sin Nombre',
+        trackWidth: trackWidth || 14,
+        controlPoints
+    };
+
+    const savedToDb = await saveLevelData(levelData);
+    res.json({ ok: true, savedToDb, message: savedToDb ? 'Guardado en DB y local.' : 'Guardado solo local (DB no disponible).' });
+});
+
+// POST /api/admin/login — verificar token de admin
+app.post('/api/admin/login', (req, res) => {
+    const { token } = req.body;
+    if (token === ADMIN_TOKEN) {
+        res.json({ ok: true });
+    } else {
+        res.status(401).json({ ok: false, error: 'Token incorrecto.' });
+    }
+});
 
 // Endpoint para inicializar tablas si no existen (opcional)
 app.get('/api/init-db', async (req, res) => {
