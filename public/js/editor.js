@@ -14,8 +14,17 @@
   let editorObstacles = []; // [{ sampleIdx, lane, type }]
   let editorRamps = [];     // [{ sampleIdx, lane, type }]
   let editorPowerups = [];  // [{ sampleIdx, lane, type }]
+  let editorShortcuts = []; // [{ startSampleIdx, endSampleIdx, halfWidth, controlPoints: [[x,y,z],...] }]
+  let editorTerrainNodes = []; // [{ x, z, height, radius, type }]
+  let editorBarriers = []; // [{ start: {x, z}, end: {x, z} }]
   let trackWidth = 14;
+  let totalLaps = 3;
   let levelName = 'Circuito Variado Grande';
+
+  // Imagen de fondo
+  let bgImage = null;       // HTMLImageElement cargada
+  let bgScale = 1.0;        // escala en unidades mundo / px
+  let bgOpacity = 0.4;
 
   // Estado del editor
   let tool = 'move';         // 'add' | 'move' | 'delete' | 'obs-add' | 'obs-move' | 'obs-delete' | 'ramp-add' | 'ramp-move' | 'ramp-delete' | 'pu-add' | 'pu-move' | 'pu-delete'
@@ -26,6 +35,8 @@
   let dragging = false;
   let dragIdx = -1;
   let dragType = null; // 'point' | 'obs' | 'ramp' | 'pu'
+  let shortcutDraft = null; // { startSampleIdx, controlPoints: [] }
+  let barrierDraft = null; // { x, z } (punto inicial)
 
   // Historia Deshacer/Rehacer
   const MAX_HISTORY = 60;
@@ -152,22 +163,26 @@
     render();
   }
 
-  async function saveToServer() {
+  async function saveToServer(slotOverride) {
     if (controlPoints.length < 3) {
       setStatus('err', 'Necesitas al menos 3 puntos de control.');
       return;
     }
-    setStatus('info', 'Guardando nivel...');
+    const slot = slotOverride !== undefined ? slotOverride : (parseInt(document.getElementById('map-slot')?.value) || 1);
+    setStatus('info', slot === 1 ? 'Guardando nivel activo...' : `Guardando en slot ${slot}...`);
     const payload = {
       name: levelName,
       trackWidth,
-      controlPoints: controlPoints.map(p => [p.x, p.z]),
+      totalLaps,
+      controlPoints: controlPoints.map(p => [p.x, p.y || 0, p.z]), // ahora guarda X, Y, Z
       obstacles: editorObstacles.map(o => ({ sampleIdx: o.sampleIdx, lane: o.lane, type: o.type })),
       ramps:     editorRamps.map(r => ({ sampleIdx: r.sampleIdx, lane: r.lane, type: r.type })),
-      powerups:  editorPowerups.map(p => ({ sampleIdx: p.sampleIdx, lane: p.lane, type: p.type }))
+      powerups:  editorPowerups.map(p => ({ sampleIdx: p.sampleIdx, lane: p.lane, type: p.type })),
+      shortcuts: editorShortcuts,
+      terrainNodes: editorTerrainNodes
     };
     try {
-      const r = await fetch('/api/level', {
+      const r = await fetch(`/api/level?slot=${slot}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -177,7 +192,9 @@
       });
       const data = await r.json();
       if (r.ok && data.ok) {
-        setStatus('ok', `Guardado. ${data.message}`);
+        setStatus('ok', `Guardado en slot ${data.slot}. ${data.message}`);
+        const slotStatusEl = document.getElementById('slot-status');
+        if (slotStatusEl) slotStatusEl.textContent = `Slot ${data.slot} guardado.`;
       } else {
         setStatus('err', data.error || 'Error desconocido al guardar.');
       }
@@ -189,19 +206,30 @@
   function applyLevelData(data) {
     levelName = data.name || 'Sin nombre';
     trackWidth = data.trackWidth || 14;
-    controlPoints = (data.controlPoints || []).map(p =>
-      Array.isArray(p) ? { x: p[0], z: p[1] } : p
-    );
+    totalLaps  = data.totalLaps  || 3;
+    controlPoints = (data.controlPoints || []).map(p => {
+      if (Array.isArray(p)) {
+        return p.length === 3 ? { x: p[0], y: p[1], z: p[2] } : { x: p[0], y: 0, z: p[1] };
+      }
+      return { x: p.x, y: p.y || 0, z: p.z };
+    });
     if (data.obstacles || data.ramps || data.powerups) {
       editorObstacles = (data.obstacles || []).map(o => ({ ...o }));
       editorRamps     = (data.ramps     || []).map(r => ({ ...r }));
       editorPowerups  = (data.powerups  || []).map(p => ({ ...p }));
+      editorShortcuts = (data.shortcuts || []).map(s => ({ ...s }));
+      editorTerrainNodes = (data.terrainNodes || []).map(t => ({ ...t }));
+      editorBarriers = (data.barriers || []).map(b => ({ start: { ...b.start }, end: { ...b.end } }));
     } else {
       generateDefaultObjects();
     }
     document.getElementById('level-name').value = levelName;
     document.getElementById('track-width').value = trackWidth;
     document.getElementById('track-width-val').textContent = trackWidth;
+    const tlEl = document.getElementById('total-laps');
+    const tlValEl = document.getElementById('total-laps-val');
+    if (tlEl) tlEl.value = totalLaps;
+    if (tlValEl) tlValEl.textContent = totalLaps;
     updateObstacleCount();
     updateRampCount();
     updatePowerupCount();
@@ -245,7 +273,10 @@
       pts: controlPoints.map(p => ({ ...p })),
       obs: editorObstacles.map(o => ({ ...o })),
       ramps: editorRamps.map(r => ({ ...r })),
-      pups: editorPowerups.map(p => ({ ...p }))
+      pups: editorPowerups.map(p => ({ ...p })),
+      shortcuts: editorShortcuts.map(s => ({ ...s, controlPoints: s.controlPoints ? s.controlPoints.map(cp => [...cp]) : [] })),
+      terrain: editorTerrainNodes.map(t => ({ ...t })),
+      barriers: editorBarriers.map(b => ({ start: { ...b.start }, end: { ...b.end } }))
     };
   }
 
@@ -266,7 +297,13 @@
     editorObstacles = snap.obs.map(o => ({ ...o }));
     editorRamps     = snap.ramps.map(r => ({ ...r }));
     editorPowerups  = snap.pups.map(p => ({ ...p }));
+    editorShortcuts = snap.shortcuts ? snap.shortcuts.map(s => ({ ...s, controlPoints: s.controlPoints ? s.controlPoints.map(cp => [...cp]) : [] })) : [];
+    editorTerrainNodes = snap.terrain ? snap.terrain.map(t => ({ ...t })) : [];
+    editorBarriers = snap.barriers ? snap.barriers.map(b => ({ start: { ...b.start }, end: { ...b.end } })) : [];
+
     selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1;
+    shortcutDraft = null;
+    barrierDraft = null;
     hidePointInfo();
     updatePointCount(); updateObstacleCount(); updateRampCount(); updatePowerupCount();
     render();
@@ -327,6 +364,54 @@
     document.getElementById('tool-pu-add').addEventListener('click', () => setTool('pu-add'));
     document.getElementById('tool-pu-delete').addEventListener('click', () => setTool('pu-delete'));
 
+    // Herramientas de Atajos y Terreno
+    document.getElementById('tool-elevate').addEventListener('click', () => setTool('elevate'));
+    document.getElementById('tool-shortcut-add').addEventListener('click', () => setTool('shortcut-add'));
+    document.getElementById('tool-shortcut-delete').addEventListener('click', () => setTool('shortcut-delete'));
+    document.getElementById('tool-terrain-add').addEventListener('click', () => setTool('terrain-add'));
+    document.getElementById('tool-terrain-delete').addEventListener('click', () => setTool('terrain-delete'));
+
+    // Herramientas de Barreras
+    document.getElementById('tool-barrier-add').addEventListener('click', () => setTool('barrier-add'));
+    document.getElementById('tool-barrier-delete').addEventListener('click', () => setTool('barrier-delete'));
+
+    document.getElementById('btn-clear-barriers').addEventListener('click', () => {
+      if (!confirm('¿Eliminar todas las barreras?')) return;
+      editorBarriers = [];
+      render(); pushHistory();
+      setStatus('info', 'Barreras limpiadas.');
+    });
+
+    document.getElementById('btn-clear-shortcuts').addEventListener('click', () => {
+      if (!confirm('¿Eliminar todos los atajos?')) return;
+      editorShortcuts = [];
+      render(); pushHistory();
+      setStatus('info', 'Atajos limpiados.');
+    });
+    
+    document.getElementById('btn-clear-terrain').addEventListener('click', () => {
+      if (!confirm('¿Eliminar todo el terreno?')) return;
+      editorTerrainNodes = [];
+      render(); pushHistory();
+      setStatus('info', 'Terreno limpiado.');
+    });
+
+    document.getElementById('node-height').addEventListener('input', e => {
+      const val = parseInt(e.target.value);
+      document.getElementById('node-height-val').textContent = val;
+      if (tool === 'elevate' && selectedIdx >= 0) {
+        controlPoints[selectedIdx].y = val;
+        render();
+      }
+    });
+    document.getElementById('node-height').addEventListener('change', () => {
+      if (tool === 'elevate' && selectedIdx >= 0) pushHistory();
+    });
+
+    document.getElementById('node-radius').addEventListener('input', e => {
+      document.getElementById('node-radius-val').textContent = e.target.value;
+    });
+
     // Acciones
     document.getElementById('btn-save').addEventListener('click', saveToServer);
     document.getElementById('btn-load').addEventListener('click', loadFromServer);
@@ -384,6 +469,106 @@
       render();
     });
 
+    // Total laps
+    const tlEl = document.getElementById('total-laps');
+    if (tlEl) {
+      tlEl.addEventListener('input', e => {
+        totalLaps = parseInt(e.target.value, 10);
+        document.getElementById('total-laps-val').textContent = totalLaps;
+      });
+    }
+
+    // Slots de mapas
+    const btnLoadSlot = document.getElementById('btn-load-slot');
+    const btnSaveSlot = document.getElementById('btn-save-slot');
+    const btnActivateSlot = document.getElementById('btn-activate-slot');
+    const slotStatus = document.getElementById('slot-status');
+
+    if (btnLoadSlot) {
+      btnLoadSlot.addEventListener('click', async () => {
+        const slot = parseInt(document.getElementById('map-slot').value) || 1;
+        setStatus('info', `Cargando slot ${slot}...`);
+        try {
+          const r = await fetch(`/api/level?slot=${slot}`);
+          const data = await r.json();
+          applyLevelData(data);
+          pushHistory();
+          centerViewport();
+          updatePointCount();
+          render();
+          setStatus('ok', `Slot ${slot} cargado: "${data.name || 'Sin nombre'}".`);
+          if (slotStatus) slotStatus.textContent = `Slot ${slot} — ${data.name || 'vacío'}`;
+        } catch(e) {
+          setStatus('err', `Error cargando slot ${slot}.`);
+        }
+      });
+    }
+
+    if (btnSaveSlot) {
+      btnSaveSlot.addEventListener('click', () => {
+        const slot = parseInt(document.getElementById('map-slot').value) || 1;
+        saveToServer(slot);
+      });
+    }
+
+    if (btnActivateSlot) {
+      btnActivateSlot.addEventListener('click', async () => {
+        const slot = parseInt(document.getElementById('map-slot').value) || 1;
+        if (!confirm(`¿Activar el slot ${slot} como nivel activo para todos los jugadores?`)) return;
+        try {
+          const r = await fetch('/api/level/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+            body: JSON.stringify({ slot })
+          });
+          const data = await r.json();
+          if (r.ok && data.ok) {
+            setStatus('ok', data.message);
+            if (slotStatus) slotStatus.textContent = `¡Slot ${slot} activado!`;
+          } else {
+            setStatus('err', data.error || 'Error activando slot.');
+          }
+        } catch(e) {
+          setStatus('err', 'Error de conexión al activar slot.');
+        }
+      });
+    }
+
+    // Imagen de fondo
+    const btnLoadBg = document.getElementById('btn-load-bg');
+    const btnClearBg = document.getElementById('btn-clear-bg');
+    const bgScaleEl = document.getElementById('bg-scale');
+    const bgOpacityEl = document.getElementById('bg-opacity');
+
+    if (btnLoadBg) {
+      btnLoadBg.addEventListener('click', () => {
+        const url = document.getElementById('bg-image-url').value.trim();
+        if (!url) { setStatus('err', 'Ingresá una URL de imagen.'); return; }
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => { bgImage = img; render(); setStatus('ok', 'Imagen de fondo cargada.'); };
+        img.onerror = () => { setStatus('err', 'No se pudo cargar la imagen. Verificá la URL y CORS.'); };
+        img.src = url;
+      });
+    }
+    if (btnClearBg) {
+      btnClearBg.addEventListener('click', () => { bgImage = null; render(); setStatus('info', 'Imagen de fondo quitada.'); });
+    }
+    if (bgScaleEl) {
+      bgScaleEl.addEventListener('input', e => {
+        bgScale = parseInt(e.target.value) / 100;
+        document.getElementById('bg-scale-val').textContent = e.target.value;
+        render();
+      });
+    }
+    if (bgOpacityEl) {
+      bgOpacityEl.addEventListener('input', e => {
+        bgOpacity = parseInt(e.target.value) / 100;
+        document.getElementById('bg-opacity-val').textContent = e.target.value;
+        render();
+      });
+    }
+
     // Point info inputs
     document.getElementById('pi-x').addEventListener('input', e => {
       if (selectedIdx < 0) return;
@@ -397,6 +582,7 @@
       render();
     });
     document.getElementById('pi-z').addEventListener('change', e => pushHistory());
+
 
     // Canvas events
     canvas.addEventListener('mousedown', onMouseDown);
@@ -444,8 +630,9 @@
 
   function setTool(t) {
     tool = t;
-    if (['add','obs-add','ramp-add','pu-add'].includes(t)) canvas.style.cursor = 'crosshair';
-    else if (['delete','obs-delete','ramp-delete','pu-delete'].includes(t)) canvas.style.cursor = 'not-allowed';
+    if (['add','obs-add','ramp-add','pu-add','terrain-add','shortcut-add','barrier-add'].includes(t)) canvas.style.cursor = 'crosshair';
+    else if (['delete','obs-delete','ramp-delete','pu-delete','terrain-delete','shortcut-delete','barrier-delete'].includes(t)) canvas.style.cursor = 'not-allowed';
+    else if (t === 'elevate') canvas.style.cursor = 'ns-resize';
     else canvas.style.cursor = 'grab';
     document.querySelectorAll('.sw-tool-btn').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('tool-' + t);
@@ -457,10 +644,26 @@
       'ramp-add': 'Click en la pista para añadir rampa',
       'ramp-delete': 'Click en rampa para eliminarla',
       'pu-add': 'Click en la pista para añadir orbe',
-      'pu-delete': 'Click en orbe para eliminarlo'
+      'pu-delete': 'Click en orbe para eliminarlo',
+      'elevate': 'Seleccioná un punto y usá el slider para cambiar su altura',
+      'terrain-add': 'Click para añadir montaña/hueco. Usá los sliders para configurar.',
+      'terrain-delete': 'Click en el terreno para eliminarlo',
+      'shortcut-add': 'Click 1: Inicio en pista. Clicks: Puntos intermedios. Doble Click en pista: Fin.',
+      'shortcut-delete': 'Click en un atajo para eliminarlo',
+      'barrier-add': 'Click 1: Inicio de barrera. Click 2: Fin de barrera.',
+      'barrier-delete': 'Click en una barrera para eliminarla'
     };
-    setStatus('info', `Herramienta: ${labels[t] || t}`);
+    setStatus('info', 'Herramienta activa: ' + (labels[t] || t));
+    
+    // Si cambiamos a elevate, intentamos sincronizar el slider
+    if (t === 'elevate' && selectedIdx >= 0) {
+      const p = controlPoints[selectedIdx];
+      const hEl = document.getElementById('node-height');
+      hEl.value = p.y || 0;
+      document.getElementById('node-height-val').textContent = p.y || 0;
+    }
   }
+
 
   function updateObstacleCount() {
     const el = document.getElementById('obs-count');
@@ -683,6 +886,108 @@
       return;
     }
 
+    if (tool === 'shortcut-add') {
+      const hit = splineHitTest(mx, my);
+      if (!shortcutDraft) {
+        if (hit) {
+          shortcutDraft = { startSampleIdx: hit.sampleIdx, controlPoints: [] };
+          setStatus('info', 'Inicio de atajo fijado. Hacé clicks para los puntos intermedios.');
+          render();
+        } else {
+          setStatus('err', 'El inicio debe estar sobre la pista principal.');
+        }
+      } else {
+        if (hit && shortcutDraft.controlPoints.length > 0) {
+           editorShortcuts.push({
+             startSampleIdx: shortcutDraft.startSampleIdx,
+             endSampleIdx: hit.sampleIdx,
+             halfWidth: trackWidth * 0.7,
+             controlPoints: shortcutDraft.controlPoints
+           });
+           shortcutDraft = null;
+           render(); pushHistory();
+           setStatus('ok', 'Atajo creado.');
+        } else {
+           const w = canvasToWorld(mx, my);
+           shortcutDraft.controlPoints.push([Math.round(w.x), 0, Math.round(w.z)]);
+           render();
+        }
+      }
+      return;
+    }
+
+    if (tool === 'shortcut-delete') {
+      // Simplificado: limpiar todos si hace click, o usar el boton
+      setStatus('info', 'Para borrar atajos, usá el botón "Limpiar atajos".');
+      return;
+    }
+
+    if (tool === 'terrain-add') {
+      const w = canvasToWorld(mx, my);
+      const h = parseInt(document.getElementById('node-height').value) || 10;
+      const r = parseInt(document.getElementById('node-radius').value) || 40;
+      editorTerrainNodes.push({ x: Math.round(w.x), z: Math.round(w.z), height: h, radius: r, type: h >= 0 ? 'hill' : 'hole' });
+      render(); pushHistory();
+      setStatus('ok', 'Terreno añadido.');
+      return;
+    }
+
+    if (tool === 'terrain-delete') {
+      const w = canvasToWorld(mx, my);
+      let bestIdx = -1, bestDist = Infinity;
+      editorTerrainNodes.forEach((node, i) => {
+        const d = (node.x - w.x)**2 + (node.z - w.z)**2;
+        if (d < bestDist && d < node.radius*node.radius) { bestIdx = i; bestDist = d; }
+      });
+      if (bestIdx >= 0) {
+        editorTerrainNodes.splice(bestIdx, 1);
+        render(); pushHistory();
+        setStatus('ok', 'Terreno eliminado.');
+      }
+      return;
+    }
+
+    if (tool === 'barrier-add') {
+      const w = canvasToWorld(mx, my);
+      if (!barrierDraft) {
+        barrierDraft = { x: Math.round(w.x), z: Math.round(w.z) };
+        setStatus('info', 'Inicio de barrera fijado. Hacé click para el final.');
+      } else {
+        editorBarriers.push({
+          start: { x: barrierDraft.x, z: barrierDraft.z },
+          end: { x: Math.round(w.x), z: Math.round(w.z) }
+        });
+        barrierDraft = null;
+        render(); pushHistory();
+        setStatus('ok', 'Barrera creada.');
+      }
+      return;
+    }
+
+    if (tool === 'barrier-delete') {
+      const w = canvasToWorld(mx, my);
+      const THRESHOLD = 300; // Distancia cuadrada (pixels o unidades mundo)
+      let bestIdx = -1, bestDist = Infinity;
+      editorBarriers.forEach((b, i) => {
+        // Distancia punto a segmento
+        const l2 = (b.end.x - b.start.x)**2 + (b.end.z - b.start.z)**2;
+        let t = 0;
+        if (l2 !== 0) {
+          t = Math.max(0, Math.min(1, ((w.x - b.start.x) * (b.end.x - b.start.x) + (w.z - b.start.z) * (b.end.z - b.start.z)) / l2));
+        }
+        const px = b.start.x + t * (b.end.x - b.start.x);
+        const pz = b.start.z + t * (b.end.z - b.start.z);
+        const d = (w.x - px)**2 + (w.z - pz)**2;
+        if (d < bestDist && d < THRESHOLD) { bestIdx = i; bestDist = d; }
+      });
+      if (bestIdx >= 0) {
+        editorBarriers.splice(bestIdx, 1);
+        render(); pushHistory();
+        setStatus('ok', 'Barrera eliminada.');
+      }
+      return;
+    }
+
     // move (default)
     // Prioridad: powerups > obstáculos/rampas > puntos de control
     if (spline) {
@@ -818,6 +1123,24 @@
   // ────────────────────────────────────────────────────
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Imagen de fondo (antes del grid para que quede debajo de todo)
+    if (bgImage) {
+      ctx.save();
+      ctx.globalAlpha = bgOpacity;
+      // La imagen se centra en el origen mundo (0,0), escalada por bgScale
+      const scaledW = bgImage.naturalWidth  * bgScale * zoom;
+      const scaledH = bgImage.naturalHeight * bgScale * zoom;
+      const originCanvas = worldToCanvas(0, 0);
+      ctx.drawImage(bgImage,
+        originCanvas.x - scaledW / 2,
+        originCanvas.y - scaledH / 2,
+        scaledW, scaledH
+      );
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
     drawGrid();
     if (controlPoints.length < 2) { drawNoPointsHint(); return; }
     const spline = buildSpline(controlPoints, true, 20);
@@ -832,11 +1155,102 @@
     ctx.lineWidth = Math.max(1, 1.5 / zoom);
     ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 5 / zoom;
     ctx.stroke(); ctx.shadowBlur = 0;
+    
+    drawShortcuts();
     if (controlPoints.length > 0) drawStartLine(spline);
     drawPowerups(spline);
     drawObstacles(spline);
     drawRamps(spline);
+    drawTerrainNodes();
+    drawBarriers();
     drawPoints();
+  }
+
+  function drawBarriers() {
+    ctx.lineWidth = Math.max(1.5, 3 / zoom);
+    ctx.strokeStyle = '#00ffff';
+    for (const b of editorBarriers) {
+      const p1 = worldToCanvas(b.start.x, b.start.z);
+      const p2 = worldToCanvas(b.end.x, b.end.z);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+    if (barrierDraft) {
+      const p1 = worldToCanvas(barrierDraft.x, barrierDraft.z);
+      ctx.beginPath();
+      ctx.arc(p1.x, p1.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#00ffff';
+      ctx.fill();
+    }
+  }
+
+  function drawShortcuts() {
+    // Dibujar atajos terminados
+    ctx.lineWidth = Math.max(1, 4 / zoom);
+    ctx.strokeStyle = '#006699';
+    for (const sc of editorShortcuts) {
+      if (!sc.controlPoints || sc.controlPoints.length === 0) continue;
+      // Convertir índices a coordenadas aproximadas
+      const startP = getTrackWorldPoint(sc.startSampleIdx);
+      const endP   = getTrackWorldPoint(sc.endSampleIdx);
+      if (!startP || !endP) continue;
+      const pts = [startP, ...sc.controlPoints.map(p => ({ x: p[0], z: p[2] })), endP];
+      const scSpline = buildSpline(pts, false, 15);
+      
+      ctx.beginPath();
+      scSpline.forEach((p, i) => {
+        const scPos = worldToCanvas(p.x, p.z);
+        i === 0 ? ctx.moveTo(scPos.x, scPos.y) : ctx.lineTo(scPos.x, scPos.y);
+      });
+      ctx.stroke();
+    }
+    
+    // Dibujar borrador en curso
+    if (shortcutDraft) {
+      ctx.strokeStyle = '#ffbb00';
+      ctx.setLineDash([5, 5]);
+      const startP = getTrackWorldPoint(shortcutDraft.startSampleIdx);
+      if (startP) {
+        ctx.beginPath();
+        const startSc = worldToCanvas(startP.x, startP.z);
+        ctx.moveTo(startSc.x, startSc.y);
+        for (const pt of shortcutDraft.controlPoints) {
+          const scPos = worldToCanvas(pt[0], pt[2]);
+          ctx.lineTo(scPos.x, scPos.y);
+          ctx.fillRect(scPos.x - 2, scPos.y - 2, 4, 4);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+  }
+
+  function drawTerrainNodes() {
+    for (const node of editorTerrainNodes) {
+      const sc = worldToCanvas(node.x, node.z);
+      const rCanvas = node.radius * zoom;
+      ctx.beginPath();
+      ctx.arc(sc.x, sc.y, rCanvas, 0, Math.PI * 2);
+      ctx.fillStyle = node.height >= 0 ? 'rgba(0, 255, 100, 0.15)' : 'rgba(255, 50, 50, 0.15)';
+      ctx.fill();
+      ctx.strokeStyle = node.height >= 0 ? 'rgba(0, 255, 100, 0.5)' : 'rgba(255, 50, 50, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      
+      ctx.fillStyle = 'white';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(node.height >= 0 ? `+${node.height}` : `${node.height}`, sc.x, sc.y + 4);
+    }
+  }
+  
+  function getTrackWorldPoint(sampleIdx) {
+    if (controlPoints.length < 2) return null;
+    const spline = buildSpline(controlPoints, true, 20);
+    const spIdx = Math.round((sampleIdx / 600) * (spline.length - 1));
+    return spline[Math.min(spIdx, spline.length - 1)];
   }
 
   function drawGrid() {
@@ -970,13 +1384,19 @@
       ctx.lineWidth = Math.max(1, 1.5 / zoom);
       ctx.stroke();
 
-      // Número
+      // Número y Elevación
       if (zoom > 0.4) {
         ctx.fillStyle = '#F5F5F5';
         ctx.font = `bold ${Math.max(6, 9 / zoom)}px 'Share Tech Mono', monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(i, sc.x, sc.y);
+        
+        if (p.y) {
+          ctx.font = `${Math.max(5, 7 / zoom)}px sans-serif`;
+          ctx.fillStyle = p.y > 0 ? '#4ade80' : '#f87171';
+          ctx.fillText(p.y > 0 ? `+${p.y}` : p.y, sc.x, sc.y - r - 4 / zoom);
+        }
       }
     });
   }

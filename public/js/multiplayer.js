@@ -549,11 +549,34 @@
       case 'hit':
         if (window.SpiderKart) {
           if (window.SpiderKart.triggerRemoteHit) {
+            // Si el targetId soy yo, le pego al jugador local
             window.SpiderKart.triggerRemoteHit(msg.targetId === playerId ? 'local' : msg.targetId);
           } else if (msg.targetId === playerId) {
             window.SpiderKart.spinOut();
           }
         }
+        break;
+
+      case 'powerup_consumed':
+        // Otro jugador consumió un powerup: ocultarlo localmente
+        if (window.SpiderKart && window.SpiderKart.consumeRemotePowerup) {
+          window.SpiderKart.consumeRemotePowerup(msg.powerupIdx);
+        }
+        break;
+
+      case 'last_player': {
+        // Solo queda 1 jugador sin terminar; notificar en pantalla si corresponde
+        const isMe = msg.id === playerId;
+        setRaceStatus(isMe
+          ? '¡Éres el último! Tienes 60 segundos para terminar.'
+          : `¡Solo falta ${msg.name}! Esperando 60 segundos.`);
+        break;
+      }
+
+      case 'level_changed':
+        // El admin activó un nuevo mapa — recargar la página para aplicarlo
+        console.log('[Level] El servidor cambió el nivel activo. Recargando...');
+        setTimeout(() => window.location.reload(), 2000);
         break;
 
       case 'room_full':
@@ -621,8 +644,14 @@
     minPlayers: MIN_PLAYERS,
     defaultLaps: DEFAULT_LAPS,
     sendHit: (targetId) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'hit', targetId }));
+      // Usar ws.emit (Socket.io) en lugar de ws.send (nativo WebSocket)
+      if (ws && ws.connected) {
+        ws.emit('message', { type: 'hit', targetId });
+      }
+    },
+    sendConsumePowerup: (powerupIdx) => {
+      if (ws && ws.connected) {
+        ws.emit('message', { type: 'consume_powerup', powerupIdx });
       }
     }
   };

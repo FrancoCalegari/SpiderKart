@@ -131,6 +131,29 @@
   const TRACK_SAMPLES = 600;
   let trackSamples = [];
 
+  // shortcutTracks almacena pistas secundarias (atajos)
+  let shortcutTracks = []; // [{ curve, samples, startT, endT, halfWidth }]
+  
+  let globalTerrainNodes = [];
+  let globalBarriers = [];
+
+  function getTerrainHeightAt(wx, wz) {
+    if (!globalTerrainNodes || globalTerrainNodes.length === 0) return 0;
+    let zh = 0;
+    for (const node of globalTerrainNodes) {
+      const dx = wx - (node.x * WORLD_SCALE);
+      const dy = wz - (node.z * WORLD_SCALE);
+      const distSq = dx * dx + dy * dy;
+      const r = (node.radius || 40) * WORLD_SCALE;
+      if (distSq < r * r) {
+        const t = 1 - Math.sqrt(distSq) / r;
+        const smoothT = t * t * (3 - 2 * t);
+        zh += (node.height || 10) * WORLD_SCALE * smoothT;
+      }
+    }
+    return zh;
+  }
+
   function sampleTrack() {
     trackSamples.length = 0;
     for (let i = 0; i <= TRACK_SAMPLES; i++) {
@@ -138,14 +161,16 @@
       const p = trackCurve.getPointAt(t);
       const tan = trackCurve.getTangentAt(t).clone().normalize();
       const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
-      trackSamples.push({ x: p.x, z: p.z, tan, normal, t });
+      // Incluimos la coordenada Y real del punto en la curva (elevación de pista) y sumamos el terreno
+      const ty = getTerrainHeightAt(p.x, p.z);
+      trackSamples.push({ x: p.x, y: p.y + ty, z: p.z, tan, normal, t });
     }
   }
   sampleTrack();
 
-  function offsetCurve(dist) {
+  function offsetCurve(dist, baseY = 0.5) {
     const pts = trackSamples.map(s => new THREE.Vector3(
-      s.x + s.normal.x * dist, 0.5, s.z + s.normal.z * dist
+      s.x + s.normal.x * dist, (s.y || 0) + baseY, s.z + s.normal.z * dist
     ));
     return new THREE.CatmullRomCurve3(pts, true);
   }
@@ -202,22 +227,25 @@
     }
   }
 
-  function buildFlatRoadMesh() {
+  function buildFlatRoadMesh(samples, halfW) {
+    samples = samples || trackSamples;
+    halfW = halfW !== undefined ? halfW : HALF_WIDTH;
     const geo = new THREE.BufferGeometry();
     const pos = [];
     const uvs = [];
     const indices = [];
 
-    const numSamples = trackSamples.length;
+    const numSamples = samples.length;
     for (let i = 0; i < numSamples; i++) {
-      const s = trackSamples[i];
-      const lx = s.x + s.normal.x * HALF_WIDTH;
-      const lz = s.z + s.normal.z * HALF_WIDTH;
-      const rx = s.x - s.normal.x * HALF_WIDTH;
-      const rz = s.z - s.normal.z * HALF_WIDTH;
+      const s = samples[i];
+      const sy = s.y || 0;
+      const lx = s.x + s.normal.x * halfW;
+      const lz = s.z + s.normal.z * halfW;
+      const rx = s.x - s.normal.x * halfW;
+      const rz = s.z - s.normal.z * halfW;
 
-      pos.push(lx, 0.02, lz);
-      pos.push(rx, 0.02, rz);
+      pos.push(lx, sy + 0.02, lz);
+      pos.push(rx, sy + 0.02, rz);
 
       const u = s.t * 20;
       uvs.push(0, u);
@@ -258,6 +286,7 @@
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
+    ground.name = 'terrain_ground';
     group.add(ground);
 
     const gridHelper = new THREE.GridHelper(1200, 80, 0x1a0000, 0x150000);
@@ -320,18 +349,158 @@
     scene.add(group);
     _trackGroup = group;
   }
+
+  // ── Atajos (pistas secundarias) ──────────────────────
+  function buildShortcuts(levelShortcuts) {
+    // Limpiar atajos anteriores
+    for (const sc of shortcutTracks) {
+      if (sc.mesh) scene.remove(sc.mesh);
+      if (sc.barrierL) scene.remove(sc.barrierL);
+      if (sc.barrierR) scene.remove(sc.barrierR);
+    }
+    shortcutTracks.length = 0;
+    if (!levelShortcuts || levelShortcuts.length === 0) return;
+
+    const scMat = new THREE.MeshStandardMaterial({ color: 0x141428, roughness: 0.8, metalness: 0.2, side: THREE.DoubleSide });
+    const barrierMat = new THREE.MeshStandardMaterial({
+      color: 0x222222, roughness: 0.6, metalness: 0.5,
+      emissive: 0x006699, emissiveIntensity: 0.5
+    });
+
+    for (const sc of levelShortcuts) {
+      // sc = { startSampleIdx, endSampleIdx, halfWidth, controlPoints: [[x,y,z],...] }
+      const hw = sc.halfWidth || HALF_WIDTH * 0.7;
+      const startSample = trackSamples[Math.min(sc.startSampleIdx, trackSamples.length - 1)];
+      const endSample   = trackSamples[Math.min(sc.endSampleIdx,   trackSamples.length - 1)];
+
+      // Construir puntos de la curva del atajo (conexión suave en inicio y fin)
+      const pts = [
+        new THREE.Vector3(startSample.x, startSample.y || 0, startSample.z),
+        ...((sc.controlPoints || []).map(([x, y, z]) => new THREE.Vector3(x, y || 0, z))),
+        new THREE.Vector3(endSample.x, endSample.y || 0, endSample.z)
+      ];
+      const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
+
+      // Muestrear la curva
+      const SC_SAMPLES = 120;
+      const samples = [];
+      for (let i = 0; i <= SC_SAMPLES; i++) {
+        const t = i / SC_SAMPLES;
+        const p = curve.getPointAt(t);
+        const tan = curve.getTangentAt(t).clone().normalize();
+        const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
+        samples.push({ x: p.x, y: p.y, z: p.z, tan, normal, t });
+      }
+
+      // Construir mesh de la carretera
+      const mesh = buildFlatRoadMesh(samples, hw);
+      mesh.material = scMat.clone();
+      scene.add(mesh);
+
+      // Barreras laterales azul neón (color distinto para distinguir del camino principal)
+      function scOffsetCurve(dist) {
+        const bpts = samples.map(s => new THREE.Vector3(
+          s.x + s.normal.x * dist, (s.y || 0) + 0.5, s.z + s.normal.z * dist
+        ));
+        return new THREE.CatmullRomCurve3(bpts, false);
+      }
+      const blGeo = new THREE.TubeGeometry(scOffsetCurve(hw + 1.5), 60, 0.4, 6, false);
+      const brGeo = new THREE.TubeGeometry(scOffsetCurve(-(hw + 1.5)), 60, 0.4, 6, false);
+      const barrierL = new THREE.Mesh(blGeo, barrierMat.clone());
+      const barrierR = new THREE.Mesh(brGeo, barrierMat.clone());
+      scene.add(barrierL);
+      scene.add(barrierR);
+
+      // Calcular t en pista principal para el inicio y fin (para mapear progreso)
+      const startT = startSample.t;
+      const endT   = endSample.t;
+
+      shortcutTracks.push({ curve, samples, hw, startT, endT, startSampleIdx: sc.startSampleIdx, endSampleIdx: sc.endSampleIdx, mesh, barrierL, barrierR });
+    }
+  }
+
+  // ── Barreras manuales (Campos de fuerza) ────
+  let manualBarrierMeshes = [];
+  function buildManualBarriers() {
+    for (const m of manualBarrierMeshes) scene.remove(m);
+    manualBarrierMeshes.length = 0;
+    if (!globalBarriers || globalBarriers.length === 0) return;
+
+    const barrierMat = new THREE.MeshStandardMaterial({
+      color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 1.5,
+      transparent: true, opacity: 0.3, side: THREE.DoubleSide
+    });
+
+    for (const b of globalBarriers) {
+      const p1 = new THREE.Vector3(b.start.x * WORLD_SCALE, 0, b.start.z * WORLD_SCALE);
+      const p2 = new THREE.Vector3(b.end.x * WORLD_SCALE, 0, b.end.z * WORLD_SCALE);
+      const dx = p2.x - p1.x, dz = p2.z - p1.z;
+      const len = Math.sqrt(dx * dx + dz * dz);
+      
+      const geo = new THREE.PlaneGeometry(len, 6);
+      const mesh = new THREE.Mesh(geo, barrierMat);
+      
+      // Posicionar en el punto medio
+      const mx = (p1.x + p2.x) / 2;
+      const mz = (p1.z + p2.z) / 2;
+      const my = getTerrainHeightAt(mx, mz) + 3; // +3 para que suba desde el suelo
+      mesh.position.set(mx, my, mz);
+      
+      // Orientar hacia la dirección de la línea
+      mesh.rotation.y = -Math.atan2(dz, dx);
+      scene.add(mesh);
+      manualBarrierMeshes.push(mesh);
+    }
+  }
+
+  // ── Nódulos de terreno (colinas y huecos decorativos) ────
+  function buildTerrainNodes(terrainNodes) {
+    if (!terrainNodes || terrainNodes.length === 0) return;
+    // Buscar el mesh del terreno en el grupo de la pista
+    if (!_trackGroup) return;
+    let groundMesh = null;
+    _trackGroup.traverse(obj => { if (obj.name === 'terrain_ground') groundMesh = obj; });
+    if (!groundMesh) return;
+
+    const pos = groundMesh.geometry.attributes.position;
+    // El PlaneGeometry(1200,1200) centrado en el origen, rotado -90deg en X
+    // sus vértices en espacio local son (x, y, 0) antes de la rotación;
+    // después de rotation.x = -PI/2, el eje Z local pasa a ser Y mundial, Y local a Z mundial.
+    // PERO: Three.js almacena los vértices antes de la transformación del objeto,
+    // así que trabajamos directamente con las coords locales: x = X mundial, y = Z mundial, z = Y mundial (altura).
+    const count = pos.count;
+    for (let i = 0; i < count; i++) {
+      const vx = pos.getX(i); // corresponde a X mundial
+      const vy = pos.getY(i); // corresponde a -Z mundial (PlaneGeometry: Y local = Z en mundo)
+      const wx = vx;
+      const wz = -vy;
+      const zh = getTerrainHeightAt(wx, wz);
+      pos.setZ(i, zh);
+    }
+    pos.needsUpdate = true;
+    groundMesh.geometry.computeVertexNormals();
+  }
   buildTrack();
 
   /* ──────────────────────────────────────────
      Carga dinámica del nivel desde /api/level
   ────────────────────────────────────────── */
-  function rebuildTrackFromData(rawPoints, halfWidth, levelObstacles, levelRamps, levelPowerups) {
+  function rebuildTrackFromData(rawPoints, halfWidth, levelObstacles, levelRamps, levelPowerups, levelTotalLaps, levelShortcuts, levelTerrainNodes, levelBarriers) {
     HALF_WIDTH = halfWidth || 14;
+    if (levelTotalLaps && levelTotalLaps >= 1) TOTAL_LAPS = levelTotalLaps;
     controlPoints = rawPoints.map(p => {
-      const [x, z] = Array.isArray(p) ? p : [p.x, p.z];
-      return new THREE.Vector3(x * WORLD_SCALE, 0, z * WORLD_SCALE);
+      // Soporte para [x,z] (formato antiguo) o [x,y,z] (con elevación)
+      if (Array.isArray(p)) {
+        const [x, y, z] = p.length === 3 ? p : [p[0], 0, p[1]];
+        return new THREE.Vector3(x * WORLD_SCALE, (y || 0) * WORLD_SCALE, z * WORLD_SCALE);
+      }
+      return new THREE.Vector3((p.x || 0) * WORLD_SCALE, (p.y || 0) * WORLD_SCALE, (p.z || 0) * WORLD_SCALE);
     });
     trackCurve = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal', 0.5);
+    
+    globalTerrainNodes = levelTerrainNodes || [];
+    globalBarriers = levelBarriers || [];
+    
     sampleTrack();
     updateMinimapBounds();
     if (_trackGroup) scene.remove(_trackGroup);
@@ -345,9 +514,12 @@
     buildObstacles(levelObstacles || null);
     buildRamps(levelRamps || null);
     buildPowerups(levelPowerups || null);
+    buildShortcuts(levelShortcuts || null);
+    buildTerrainNodes(levelTerrainNodes || null);
+    buildManualBarriers();
     if (typeof kartGroup !== 'undefined') {
       const s0 = trackSamples[0];
-      kartGroup.position.set(s0.x, 0, s0.z);
+      kartGroup.position.set(s0.x, s0.y || 0, s0.z);
     }
     if (window.SpiderKart) {
       window.SpiderKart.trackHalfWidth = HALF_WIDTH;
@@ -361,9 +533,15 @@
     .then(r => r.json())
     .then(data => {
       if (!data || !Array.isArray(data.controlPoints) || data.controlPoints.length < 3) return;
+      // Aplicar totalLaps del nivel
+      if (data.totalLaps && data.totalLaps >= 1) TOTAL_LAPS = data.totalLaps;
       const isDifferent = JSON.stringify(data.controlPoints) !== JSON.stringify(DEFAULT_CONTROL_POINTS);
-      if (isDifferent || data.obstacles || data.ramps || data.powerups) {
-        rebuildTrackFromData(data.controlPoints, data.trackWidth, data.obstacles, data.ramps, data.powerups);
+      if (isDifferent || data.obstacles || data.ramps || data.powerups || data.shortcuts || data.terrainNodes || data.barriers) {
+        rebuildTrackFromData(
+          data.controlPoints, data.trackWidth,
+          data.obstacles, data.ramps, data.powerups,
+          data.totalLaps, data.shortcuts, data.terrainNodes, data.barriers
+        );
       } else if (data.obstacles || data.ramps || data.powerups) {
         for (const obs of obstacles) { scene.remove(obs.mesh); scene.remove(obs.light); }
         obstacles.length = 0;
@@ -375,6 +553,9 @@
         buildRamps(data.ramps || null);
         buildPowerups(data.powerups || null);
       }
+      // Actualizar HUD de vueltas con el valor correcto
+      const hudLapEl = document.getElementById('hud-lap');
+      if (hudLapEl) hudLapEl.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
     })
     .catch(() => {
       console.warn('[Level] No se pudo cargar el nivel desde /api/level, usando circuito default.');
@@ -1467,7 +1648,7 @@
   /* ──────────────────────────────────────────
      Carrera — constantes y tiempo
   ────────────────────────────────────────── */
-  const TOTAL_LAPS = 5;
+  let TOTAL_LAPS = 5; // Se actualiza desde el JSON del nivel
 
   function formatTime(ms) {
     if (ms < 0) return '--:--.---';
@@ -1805,6 +1986,7 @@
      Track collision + progreso de vuelta
   ────────────────────────────────────────── */
   function resolveTrackCollision(dt) {
+    // ── 1. Buscar punto más cercano en la pista PRINCIPAL ──
     let bestIdx = -1;
     let bestDist = Infinity;
     const searchWindow = 60;
@@ -1817,52 +1999,97 @@
       const dist = dx * dx + dz * dz;
       if (dist < bestDist) { bestDist = dist; bestIdx = i; }
     }
-    const sample = trackSamples[bestIdx];
-    state.nearestIdx = bestIdx;
 
+    // ── 2. Buscar punto más cercano en ATAJOS ──
+    let bestScTrack = null;
+    let bestScIdx   = -1;
+    let bestScDist  = Infinity;
+    for (const sc of shortcutTracks) {
+      for (let i = 0; i < sc.samples.length; i++) {
+        const s = sc.samples[i];
+        const dx = state.posX - s.x;
+        const dz = state.posZ - s.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < bestScDist) { bestScDist = d2; bestScIdx = i; bestScTrack = sc; }
+      }
+    }
+
+    // ── 3. Decidir qué superficie gana ──
+    const useShortcut = bestScTrack !== null && bestScDist < bestDist;
+    let sample, effectiveHW;
+
+    if (useShortcut) {
+      sample = bestScTrack.samples[bestScIdx];
+      effectiveHW = bestScTrack.hw;
+      state.nearestIdx = bestIdx; // guardar índice principal de todas formas
+      state.onShortcut = bestScTrack;
+      // Mapear el t del atajo al t de la pista principal
+      const scT = sample.t; // 0..1 dentro del atajo
+      state.lastT = bestScTrack.startT + scT * (bestScTrack.endT - bestScTrack.startT);
+    } else {
+      sample = trackSamples[bestIdx];
+      effectiveHW = HALF_WIDTH;
+      state.nearestIdx = bestIdx;
+      state.onShortcut = null;
+    }
+
+    // ── 4. Colisión con barreras manuales (topes) ──
+    for (const b of globalBarriers) {
+      // Intersección básica de punto a segmento
+      const bx1 = b.start.x * WORLD_SCALE, bz1 = b.start.z * WORLD_SCALE;
+      const bx2 = b.end.x * WORLD_SCALE, bz2 = b.end.z * WORLD_SCALE;
+      const l2 = (bx2 - bx1)**2 + (bz2 - bz1)**2;
+      let t = 0;
+      if (l2 !== 0) {
+        t = Math.max(0, Math.min(1, ((state.posX - bx1) * (bx2 - bx1) + (state.posZ - bz1) * (bz2 - bz1)) / l2));
+      }
+      const ppx = bx1 + t * (bx2 - bx1);
+      const ppz = bz1 + t * (bz2 - bz1);
+      const ddx = state.posX - ppx;
+      const ddz = state.posZ - ppz;
+      const dist = Math.sqrt(ddx*ddx + ddz*ddz);
+      if (dist < 1.5) { // Radio de colisión del kart
+        const nx = ddx / dist, nz = ddz / dist;
+        const push = 1.5 - dist;
+        state.posX += nx * push;
+        state.posZ += nz * push;
+        const velX = Math.cos(state.angle) * state.speed;
+        const velZ = Math.sin(state.angle) * state.speed;
+        // Rebote friccional
+        const vTan = velX * (-nz) + velZ * (nx);
+        state.speed = vTan * WALL_FRICTION;
+      }
+    }
+
+    // ── 5. Detección Off-Road (Fuera de pista) ──
     const relX = state.posX - sample.x;
     const relZ = state.posZ - sample.z;
     const perp = relX * sample.normal.x + relZ * sample.normal.z;
-    const limit = HALF_WIDTH - WALL_MARGIN;
+    const limit = effectiveHW;
 
-    if (Math.abs(perp) > limit) {
-      const side = perp > 0 ? 1 : -1;
-      const penetration = Math.abs(perp) - limit;
-      const push = penetration * WALL_CORRECTION;
-      state.posX -= sample.normal.x * side * push;
-      state.posZ -= sample.normal.z * side * push;
+    state.isOffRoad = Math.abs(perp) > limit;
 
-      const velX = Math.cos(state.angle) * state.speed;
-      const velZ = Math.sin(state.angle) * state.speed;
-      const vTangent = velX * sample.tan.x + velZ * sample.tan.z;
-      state.speed = vTangent * WALL_FRICTION;
-    }
-
-    // Detección de sentido contrario
+    // Detección de sentido contrario o fuera de pista
     const dirX = Math.cos(state.angle);
     const dirZ = Math.sin(state.angle);
     const dot = dirX * sample.tan.x + dirZ * sample.tan.z;
-    // Solo activa el aviso si el kart se mueve (no si está quieto)
-    const nowWrongWay = (Math.abs(state.speed) > 0.04) && (dot < -0.2);
+    const nowWrongWay = !useShortcut && !state.isOffRoad && (Math.abs(state.speed) > 0.04) && (dot < -0.2);
     state.isWrongWay = nowWrongWay;
 
-    // Acumular tiempo en sentido contrario
-    if (nowWrongWay) {
-      // dt se pasa desde update() pero aquí no tenemos acceso — usamos un estimado de 1/60
-      // Se acumula via resolveTrackCollision que se llama cada frame desde update(dt)
+    if (nowWrongWay || state.isOffRoad) {
       state.wrongWayTimer += dt;
-      if (state.wrongWayTimer >= 5.0) {
-        // Teleportar al último checkpoint válido que el jugador cruzó
+      if (state.wrongWayTimer >= 2.5) {
+        // Teleportar al checkpoint válido
         const lastCpIdx = ((state.nextCheckpoint - 1) + CHECKPOINT_COUNT) % CHECKPOINT_COUNT;
         const lastCp = checkpoints[lastCpIdx];
         const cpSample = trackSamples[lastCp.idx];
-        // Posicionar al kart en el checkpoint, orientado en el sentido correcto
         state.posX = cpSample.x;
         state.posZ = cpSample.z;
-        state.posY = 0;
+        state.posY = cpSample.y;
         state.angle = Math.atan2(cpSample.tan.z, cpSample.tan.x);
         state.speed = 0;
         state.isWrongWay = false;
+        state.isOffRoad = false;
         state.wrongWayTimer = 0;
         spawnPickupBurst(state.posX, 1.0, state.posZ);
       }
@@ -1871,7 +2098,8 @@
     }
 
     updateCheckpointProgress(bestIdx);
-    state.lastT = sample.t;
+    // Guardar lastT en pista principal (mapeado desde atajo si corresponde)
+    if (!useShortcut) state.lastT = sample.t;
   }
 
   /* ──────────────────────────────────────────
@@ -1896,10 +2124,16 @@
         const dx = state.posX - p.mesh.position.x;
         const dz = state.posZ - p.mesh.position.z;
         if (dx * dx + dz * dz < POWERUP_PICKUP_RADIUS * POWERUP_PICKUP_RADIUS) {
+          const puIdx = powerups.indexOf(p);
           p.active = false;
           p.respawnTimer = POWERUP_RESPAWN;
           p.mesh.visible = false;
           spawnPickupBurst(p.mesh.position.x, p.mesh.position.y, p.mesh.position.z);
+
+          // Notificar al servidor para sincronizar con otros jugadores
+          if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.sendConsumePowerup) {
+            window.SpiderKartMultiplayer.sendConsumePowerup(puIdx);
+          }
           
           if (p.type === 'boost') {
             // Mini-boost del orbe: usa su propio timer, NO toca powerTimer (fuel de K)
@@ -2364,8 +2598,11 @@
       }
 
       // Aterrizaje en el suelo
-      if (state.posY <= GROUND_Y) {
-        state.posY = GROUND_Y;
+      // dynamicGroundY: la altura de la pista principal o del terreno si está off-road
+      const nearSample = trackSamples[state.nearestIdx] || trackSamples[0];
+      const dynamicGroundY = state.isOffRoad ? getTerrainHeightAt(state.posX, state.posZ) : (nearSample.y || 0);
+      if (state.posY <= dynamicGroundY) {
+        state.posY = dynamicGroundY;
         state.velY = 0;
         state.isGrounded = true;
         state.kartPitch = 0;
@@ -2652,6 +2889,15 @@
       }
     },
     triggerRemoteHit,
+    consumeRemotePowerup(powerupIdx) {
+      // Llamado por multiplayer.js al recibir 'powerup_consumed' del servidor
+      const p = powerups[powerupIdx];
+      if (p && p.active) {
+        p.active = false;
+        p.respawnTimer = POWERUP_RESPAWN;
+        p.mesh.visible = false;
+      }
+    },
     lockAndReset(positionIndex = 0) {
       state.isLocked = true;
       state.speed = 0;

@@ -33,10 +33,12 @@ const SPIDER_DB_NAME = process.env.spiderdbname;
 // Admin
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 const LEVELS_FILE = join(__dirname, 'levels.json');
+const LEVELS_SLOTS_FILE = join(__dirname, 'levels_slots.json');
 
 const DEFAULT_LEVEL = {
     name: 'Circuito Variado Grande',
     trackWidth: 14,
+    totalLaps: 3,
     controlPoints: [
         [160,0],[160,-70],[150,-140],[110,-200],[50,-210],
         [0,-180],[-40,-130],[-90,-150],[-140,-130],[-180,-80],
@@ -44,6 +46,17 @@ const DEFAULT_LEVEL = {
         [30,130],[90,140],[140,110],[160,60]
     ]
 };
+
+// Helper: obtener store de slots (archivo local de slots)
+function readSlotsStore() {
+    if (existsSync(LEVELS_SLOTS_FILE)) {
+        try { return JSON.parse(readFileSync(LEVELS_SLOTS_FILE, 'utf8')); } catch(e) {}
+    }
+    return {};
+}
+function writeSlotsStore(store) {
+    writeFileSync(LEVELS_SLOTS_FILE, JSON.stringify(store, null, 2), 'utf8');
+}
 
 // Middleware de autenticación para /admin
 function requireAdmin(req, res, next) {
@@ -53,7 +66,14 @@ function requireAdmin(req, res, next) {
 }
 
 // Helper: leer nivel desde SpiderWebARG DB (con fallback a levels.json local)
-async function readLevelData() {
+// slot: 1..5, 0 = activo (default). Slot 1 siempre es el nivel activo.
+async function readLevelData(slot = 0) {
+    // Slots 2-5: solo local (no van a la DB remota)
+    if (slot >= 2 && slot <= 5) {
+        const store = readSlotsStore();
+        return store[slot] || { ...DEFAULT_LEVEL, name: `Slot ${slot} vacío` };
+    }
+    // Slot 0 o 1 = nivel activo
     // 1) Intentar desde la DB remota
     try {
         const result = await executeQuery(`SELECT level_json FROM spiderkart_levels ORDER BY updated_at DESC LIMIT 1`);
@@ -65,18 +85,26 @@ async function readLevelData() {
     }
     // 2) Fallback a levels.json local
     if (existsSync(LEVELS_FILE)) {
-        return JSON.parse(readFileSync(LEVELS_FILE, 'utf8'));
+        try { return JSON.parse(readFileSync(LEVELS_FILE, 'utf8')); } catch(e) {}
     }
     // 3) Hardcoded default
     return DEFAULT_LEVEL;
 }
 
 // Helper: guardar nivel en SpiderWebARG DB (y local como backup)
-async function saveLevelData(levelData) {
+async function saveLevelData(levelData, slot = 0) {
     const json = JSON.stringify(levelData);
     let savedToDb = false;
 
-    // Intentar crear tabla si no existe
+    // Slots 2-5: solo local
+    if (slot >= 2 && slot <= 5) {
+        const store = readSlotsStore();
+        store[slot] = levelData;
+        try { writeSlotsStore(store); console.log(`[Level] Slot ${slot} guardado local.`); } catch(e) { console.error('[Level] Error guardando slot local:', e.message); }
+        return false;
+    }
+
+    // Slot 0 o 1 = nivel activo → guardar en DB + local
     try {
         await executeQuery(`
             CREATE TABLE IF NOT EXISTS spiderkart_levels (
@@ -85,7 +113,6 @@ async function saveLevelData(levelData) {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         `);
-        // Upsert: borrar y re-insertar (sencillo, solo hay 1 nivel activo)
         await executeQuery(`DELETE FROM spiderkart_levels`);
         await executeQuery(`INSERT INTO spiderkart_levels (level_json) VALUES ('${json.replace(/'/g, "''")}')`);
         savedToDb = true;
@@ -97,6 +124,10 @@ async function saveLevelData(levelData) {
     // Siempre guardar en levels.json local como backup
     try {
         writeFileSync(LEVELS_FILE, JSON.stringify(levelData, null, 2), 'utf8');
+        // Además actualizar slot 1 en el store de slots
+        const store = readSlotsStore();
+        store[1] = levelData;
+        writeSlotsStore(store);
         console.log('[Level] Guardado en levels.json local.');
     } catch (e) {
         console.error('[Level] Error guardando levels.json:', e.message);
@@ -148,9 +179,11 @@ app.get('/admin', (req, res) => {
 });
 
 // GET /api/level — obtener el nivel actual (público, lo necesita el juego)
+// Query param: ?slot=1..5 (opcional, default = nivel activo)
 app.get('/api/level', async (req, res) => {
     try {
-        const level = await readLevelData();
+        const slot = parseInt(req.query.slot) || 0;
+        const level = await readLevelData(slot);
         res.json(level);
     } catch (error) {
         console.error('[Level] Error leyendo nivel:', error);
@@ -158,9 +191,34 @@ app.get('/api/level', async (req, res) => {
     }
 });
 
+// GET /api/levels — listar todos los slots disponibles (solo admin)
+app.get('/api/levels', requireAdmin, async (req, res) => {
+    try {
+        const store = readSlotsStore();
+        const slots = [];
+        // Slot 1 = nivel activo
+        const active = await readLevelData(0);
+        store[1] = active;
+        for (let i = 1; i <= 5; i++) {
+            const lvl = store[i];
+            slots.push({
+                slot: i,
+                name: lvl ? lvl.name : `Slot ${i} (vacío)`,
+                empty: !lvl,
+                totalLaps: lvl ? (lvl.totalLaps || 3) : 3
+            });
+        }
+        res.json({ slots });
+    } catch (e) {
+        res.status(500).json({ error: 'Error leyendo slots.' });
+    }
+});
+
 // POST /api/level — guardar nuevo nivel (solo admin)
+// Query param: ?slot=1..5 (opcional, default = 1 = nivel activo)
 app.post('/api/level', requireAdmin, async (req, res) => {
-    const { name, trackWidth, controlPoints } = req.body;
+    const { name, trackWidth, totalLaps, controlPoints, obstacles, ramps, powerups, shortcuts, terrainNodes, barriers } = req.body;
+    const slot = parseInt(req.query.slot) || 0;
 
     if (!controlPoints || !Array.isArray(controlPoints) || controlPoints.length < 3) {
         return res.status(400).json({ error: 'El nivel necesita al menos 3 puntos de control.' });
@@ -169,11 +227,36 @@ app.post('/api/level', requireAdmin, async (req, res) => {
     const levelData = {
         name: name || 'Nivel Sin Nombre',
         trackWidth: trackWidth || 14,
-        controlPoints
+        totalLaps: Math.max(1, Math.min(20, parseInt(totalLaps) || 3)),
+        controlPoints,
+        obstacles: obstacles || [],
+        ramps: ramps || [],
+        powerups: powerups || [],
+        shortcuts: shortcuts || [],
+        terrainNodes: terrainNodes || [],
+        barriers: barriers || []
     };
 
-    const savedToDb = await saveLevelData(levelData);
-    res.json({ ok: true, savedToDb, message: savedToDb ? 'Guardado en DB y local.' : 'Guardado solo local (DB no disponible).' });
+    const savedToDb = await saveLevelData(levelData, slot);
+    res.json({ ok: true, savedToDb, slot: slot || 1, message: savedToDb ? 'Guardado en DB y local.' : 'Guardado solo local (DB no disponible).' });
+});
+
+// POST /api/level/activate — activar un slot como nivel activo (solo admin)
+app.post('/api/level/activate', requireAdmin, async (req, res) => {
+    const { slot } = req.body;
+    if (!slot || slot < 1 || slot > 5) return res.status(400).json({ error: 'Slot inválido (1-5).' });
+    try {
+        const store = readSlotsStore();
+        const levelData = store[slot];
+        if (!levelData) return res.status(404).json({ error: `Slot ${slot} está vacío.` });
+        // Guardar como nivel activo (slot 0/1)
+        await saveLevelData(levelData, 0);
+        // Notificar a todos los clientes conectados que el nivel cambió
+        io.emit('message', { type: 'level_changed', slot });
+        res.json({ ok: true, message: `Slot ${slot} activado como nivel actual.` });
+    } catch(e) {
+        res.status(500).json({ error: 'Error activando slot.' });
+    }
 });
 
 // POST /api/admin/login — verificar token de admin
@@ -477,29 +560,58 @@ function startCountdown(roomName) {
 
 function checkRaceFinish(roomName) {
     const room = rooms[roomName];
-    if (!room) return;
-    
-    const allFinished = room.players.every(p => p.timeMs > 0);
-    if (allFinished) {
-        room.phase = 'finished';
-        const results = room.players
-            .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs }))
-            .sort((a, b) => a.timeMs - b.timeMs)
-            .map((r, idx) => ({ ...r, position: idx + 1 }));
-            
-        broadcastToRoom(roomName, { type: 'race_results', results, saved: false });
-        
-        setTimeout(() => {
-            if (!rooms[roomName]) return;
-            room.players.forEach(p => p.timeMs = 0);
-            room.phase = 'waiting';
-            if (room.players.length >= MIN_PLAYERS) {
-                startCountdown(roomName);
-            } else {
-                broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
-            }
-        }, 10000);
+    if (!room || room.phase !== 'racing') return;
+
+    const finished = room.players.filter(p => p.timeMs > 0);
+    const pending  = room.players.filter(p => p.timeMs <= 0);
+
+    // La carrera termina cuando:
+    //  a) Todos completaron, O
+    //  b) Solo queda 1 jugador sin terminar (el último — se le da tiempo extra o se le fuerza)
+    const shouldEnd = pending.length === 0 || (finished.length > 0 && pending.length === 1);
+    if (!shouldEnd) return;
+
+    // Si queda 1 pendiente, darle 60 s adicionales antes de forzar fin
+    if (pending.length === 1 && !room.lastPlayerTimer) {
+        broadcastToRoom(roomName, {
+            type: 'last_player',
+            id: pending[0].id,
+            name: pending[0].name
+        });
+        room.lastPlayerTimer = setTimeout(() => {
+            // Tiempo expiró: asignar tiempo máximo al jugador pendiente
+            const lastPlayer = room.players.find(p => p.timeMs <= 0);
+            if (lastPlayer) lastPlayer.timeMs = 99 * 60 * 1000; // 99 min DNF
+            room.lastPlayerTimer = null;
+            checkRaceFinish(roomName);
+        }, 60000);
+        return;
     }
+
+    // Cancelar timer del último jugador si todos terminaron
+    if (room.lastPlayerTimer) {
+        clearTimeout(room.lastPlayerTimer);
+        room.lastPlayerTimer = null;
+    }
+
+    room.phase = 'finished';
+    const results = room.players
+        .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs }))
+        .sort((a, b) => a.timeMs - b.timeMs)
+        .map((r, idx) => ({ ...r, position: idx + 1 }));
+
+    broadcastToRoom(roomName, { type: 'race_results', results, saved: false });
+
+    setTimeout(() => {
+        if (!rooms[roomName]) return;
+        room.players.forEach(p => p.timeMs = 0);
+        room.phase = 'waiting';
+        if (room.players.length >= MIN_PLAYERS) {
+            startCountdown(roomName);
+        } else {
+            broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
+        }
+    }, 10000);
 }
 
 io.on('connection', (socket) => {
@@ -598,14 +710,27 @@ io.on('connection', (socket) => {
                 case 'hit': {
                     const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
                     if (!playerGlobal) return;
-                    broadcastToRoom(playerGlobal.room, {
+                    // Broadcast a TODA la sala (incluido emisor) para que el targetId reciba el hit
+                    io.to(playerGlobal.room).emit('message', {
                         type: 'hit',
                         targetId: data.targetId,
                         sourceId: playerGlobal.id
-                    }, null);
+                    });
                     break;
                 }
-                
+
+                case 'consume_powerup': {
+                    // Sincronizar consumo de powerup: informar al resto que ese powerup desapareció
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
+                    if (!playerGlobal) return;
+                    broadcastToRoom(playerGlobal.room, {
+                        type: 'powerup_consumed',
+                        powerupIdx: data.powerupIdx,
+                        consumedBy: playerGlobal.id
+                    }, socket); // excluir al que lo consumió (ya lo procesó localmente)
+                    break;
+                }
+
                 case 'leave': {
                     handleLeave(socket);
                     break;
