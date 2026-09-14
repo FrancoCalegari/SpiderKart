@@ -250,8 +250,13 @@
   }
 
   function pushHistory() {
+    const newSnap = snapshot();
+    if (historyIdx >= 0) {
+      const currentSnap = historyStack[historyIdx];
+      if (JSON.stringify(newSnap) === JSON.stringify(currentSnap)) return;
+    }
     historyStack = historyStack.slice(0, historyIdx + 1);
-    historyStack.push(snapshot());
+    historyStack.push(newSnap);
     if (historyStack.length > MAX_HISTORY) historyStack.shift();
     historyIdx = historyStack.length - 1;
   }
@@ -364,11 +369,13 @@
       controlPoints[selectedIdx].x = parseFloat(e.target.value) || 0;
       render();
     });
+    document.getElementById('pi-x').addEventListener('change', e => pushHistory());
     document.getElementById('pi-z').addEventListener('input', e => {
       if (selectedIdx < 0) return;
       controlPoints[selectedIdx].z = parseFloat(e.target.value) || 0;
       render();
     });
+    document.getElementById('pi-z').addEventListener('change', e => pushHistory());
 
     // Canvas events
     canvas.addEventListener('mousedown', onMouseDown);
@@ -396,10 +403,10 @@
 
       if (!inInput) {
         if (e.key === 'Delete') {
-          if (selectedObsIdx >= 0)    { pushHistory(); editorObstacles.splice(selectedObsIdx, 1); selectedObsIdx = -1; updateObstacleCount(); render(); return; }
-          if (selectedRampIdx >= 0)   { pushHistory(); editorRamps.splice(selectedRampIdx, 1);    selectedRampIdx = -1; updateRampCount();    render(); return; }
-          if (selectedPowerupIdx >= 0) { pushHistory(); editorPowerups.splice(selectedPowerupIdx,1); selectedPowerupIdx = -1; updatePowerupCount(); render(); return; }
-          if (selectedIdx >= 0)       { pushHistory(); removePoint(selectedIdx); }
+          if (selectedObsIdx >= 0)    { editorObstacles.splice(selectedObsIdx, 1); selectedObsIdx = -1; updateObstacleCount(); render(); pushHistory(); return; }
+          if (selectedRampIdx >= 0)   { editorRamps.splice(selectedRampIdx, 1);    selectedRampIdx = -1; updateRampCount();    render(); pushHistory(); return; }
+          if (selectedPowerupIdx >= 0) { editorPowerups.splice(selectedPowerupIdx,1); selectedPowerupIdx = -1; updatePowerupCount(); render(); pushHistory(); return; }
+          if (selectedIdx >= 0)       { removePoint(selectedIdx); pushHistory(); }
         }
         if (e.key === 'Escape') { selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; hidePointInfo(); render(); }
         if (e.key === 'a') setTool('add');
@@ -571,7 +578,6 @@
     if (tool === 'add') {
       const w = canvasToWorld(mx, my);
       const newPt = { x: Math.round(w.x), z: Math.round(w.z) };
-      pushHistory();
       if (controlPoints.length < 2) {
         // Sin pista todavía: simplemente agregar al final
         controlPoints.push(newPt);
@@ -583,22 +589,24 @@
         selectedIdx = seg + 1;
       }
       selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1;
-      showPointInfo(selectedIdx); updatePointCount(); render(); return;
+      showPointInfo(selectedIdx); updatePointCount(); render();
+      pushHistory();
+      return;
     }
 
     if (tool === 'delete') {
       const idx = hitTest(mx, my);
-      if (idx >= 0) { pushHistory(); removePoint(idx); } return;
+      if (idx >= 0) { removePoint(idx); pushHistory(); } return;
     }
 
     if (tool === 'obs-add') {
       const hit = splineHitTest(mx, my);
       if (hit) {
-        pushHistory();
         const obsType = parseInt(document.getElementById('obs-type').value, 10) || 0;
         editorObstacles.push({ sampleIdx: hit.sampleIdx, lane: hit.lane, type: obsType });
         selectedObsIdx = editorObstacles.length - 1;
         updateObstacleCount(); render();
+        pushHistory();
         setStatus('ok', `Obstáculo añadido en muestra ${hit.sampleIdx}.`);
       } else { setStatus('err', 'Hacé click más cerca de la pista.'); }
       return;
@@ -607,7 +615,7 @@
     if (tool === 'obs-delete') {
       if (spline) {
         const idx = overlayHitTest(mx, my, editorObstacles, spline);
-        if (idx >= 0) { pushHistory(); editorObstacles.splice(idx, 1); selectedObsIdx = -1; updateObstacleCount(); render(); setStatus('info', 'Obstáculo eliminado.'); }
+        if (idx >= 0) { editorObstacles.splice(idx, 1); selectedObsIdx = -1; updateObstacleCount(); render(); pushHistory(); setStatus('info', 'Obstáculo eliminado.'); }
       }
       return;
     }
@@ -615,11 +623,11 @@
     if (tool === 'ramp-add') {
       const hit = splineHitTest(mx, my);
       if (hit) {
-        pushHistory();
         const rampType = document.getElementById('ramp-type').value || 'gold';
         editorRamps.push({ sampleIdx: hit.sampleIdx, lane: hit.lane, type: rampType });
         selectedRampIdx = editorRamps.length - 1;
         updateRampCount(); render();
+        pushHistory();
         setStatus('ok', `Rampa "${rampType}" añadida en muestra ${hit.sampleIdx}.`);
       } else { setStatus('err', 'Hacé click más cerca de la pista.'); }
       return;
@@ -628,7 +636,7 @@
     if (tool === 'ramp-delete') {
       if (spline) {
         const idx = overlayHitTest(mx, my, editorRamps, spline);
-        if (idx >= 0) { pushHistory(); editorRamps.splice(idx, 1); selectedRampIdx = -1; updateRampCount(); render(); setStatus('info', 'Rampa eliminada.'); }
+        if (idx >= 0) { editorRamps.splice(idx, 1); selectedRampIdx = -1; updateRampCount(); render(); pushHistory(); setStatus('info', 'Rampa eliminada.'); }
       }
       return;
     }
@@ -636,11 +644,11 @@
     if (tool === 'pu-add') {
       const hit = splineHitTest(mx, my);
       if (hit) {
-        pushHistory();
         const puType = document.getElementById('pu-type').value || 'missile';
         editorPowerups.push({ sampleIdx: hit.sampleIdx, lane: hit.lane, type: puType });
         selectedPowerupIdx = editorPowerups.length - 1;
         updatePowerupCount(); render();
+        pushHistory();
         setStatus('ok', `Orbe "${puType}" añadido en muestra ${hit.sampleIdx}.`);
       } else { setStatus('err', 'Hacé click más cerca de la pista.'); }
       return;
@@ -649,7 +657,7 @@
     if (tool === 'pu-delete') {
       if (spline) {
         const idx = overlayHitTest(mx, my, editorPowerups, spline);
-        if (idx >= 0) { pushHistory(); editorPowerups.splice(idx, 1); selectedPowerupIdx = -1; updatePowerupCount(); render(); setStatus('info', 'Orbe eliminado.'); }
+        if (idx >= 0) { editorPowerups.splice(idx, 1); selectedPowerupIdx = -1; updatePowerupCount(); render(); pushHistory(); setStatus('info', 'Orbe eliminado.'); }
       }
       return;
     }
@@ -659,21 +667,18 @@
     if (spline) {
       const puIdx = overlayHitTest(mx, my, editorPowerups, spline);
       if (puIdx >= 0) {
-        pushHistory();
         selectedPowerupIdx = puIdx; selectedObsIdx = -1; selectedRampIdx = -1; selectedIdx = -1;
         dragging = true; dragIdx = puIdx; dragType = 'pu';
         canvas.style.cursor = 'grabbing'; hidePointInfo(); render(); return;
       }
       const obsIdx = overlayHitTest(mx, my, editorObstacles, spline);
       if (obsIdx >= 0) {
-        pushHistory();
         selectedObsIdx = obsIdx; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedIdx = -1;
         dragging = true; dragIdx = obsIdx; dragType = 'obs';
         canvas.style.cursor = 'grabbing'; hidePointInfo(); render(); return;
       }
       const rampIdx = overlayHitTest(mx, my, editorRamps, spline);
       if (rampIdx >= 0) {
-        pushHistory();
         selectedRampIdx = rampIdx; selectedObsIdx = -1; selectedPowerupIdx = -1; selectedIdx = -1;
         dragging = true; dragIdx = rampIdx; dragType = 'ramp';
         canvas.style.cursor = 'grabbing'; hidePointInfo(); render(); return;
@@ -682,7 +687,6 @@
 
     const idx = hitTest(mx, my);
     if (idx >= 0) {
-      pushHistory();
       dragging = true; dragIdx = idx; selectedIdx = idx; dragType = 'point';
       selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1;
       canvas.style.cursor = 'grabbing';
@@ -729,7 +733,10 @@
                  : ['delete','obs-delete','ramp-delete','pu-delete'].includes(tool) ? 'not-allowed' : 'grab';
       canvas.style.cursor = curs;
     }
-    if (dragging) { dragging = false; dragIdx = -1; dragType = null; canvas.style.cursor = 'grab'; }
+    if (dragging) { 
+      dragging = false; dragIdx = -1; dragType = null; canvas.style.cursor = 'grab'; 
+      pushHistory();
+    }
   }
 
   function onWheel(e) {
