@@ -281,7 +281,7 @@
   function buildTrack() {
     const group = new THREE.Group();
 
-    const groundGeo = new THREE.PlaneGeometry(1200, 1200, 64, 64);
+    const groundGeo = new THREE.PlaneGeometry(1200, 1200, 200, 200);
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x0d0d1a, roughness: 0.9, metalness: 0.1 });
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
@@ -2598,9 +2598,11 @@
       }
 
       // Aterrizaje en el suelo
-      // dynamicGroundY: la altura de la pista principal o del terreno si está off-road
+      // dynamicGroundY: la altura de la pista principal o del terreno
       const nearSample = trackSamples[state.nearestIdx] || trackSamples[0];
-      const dynamicGroundY = state.isOffRoad ? getTerrainHeightAt(state.posX, state.posZ) : (nearSample.y || 0);
+      const trackGroundY = nearSample.y || 0;
+      const terrainHeight = getTerrainHeightAt(state.posX, state.posZ);
+      const dynamicGroundY = state.isOffRoad ? terrainHeight : Math.max(trackGroundY, terrainHeight);
       if (state.posY <= dynamicGroundY) {
         state.posY = dynamicGroundY;
         state.velY = 0;
