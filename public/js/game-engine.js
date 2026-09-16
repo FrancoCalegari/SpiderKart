@@ -2596,21 +2596,26 @@
           state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, -0.1, 0.06);
         }
       }
+    } else {
+      state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0, 0.2);
+    }
 
-      // Aterrizaje en el suelo
-      // dynamicGroundY: la altura de la pista principal o del terreno
+    // ── Colisión con el suelo / terreno (se ejecuta SIEMPRE, grounded o no) ──
+    {
       const nearSample = trackSamples[state.nearestIdx] || trackSamples[0];
       const trackGroundY = nearSample.y || 0;
       const terrainHeight = getTerrainHeightAt(state.posX, state.posZ);
       const dynamicGroundY = state.isOffRoad ? terrainHeight : Math.max(trackGroundY, terrainHeight);
+
       if (state.posY <= dynamicGroundY) {
         state.posY = dynamicGroundY;
+        const wasAirborne = !state.isGrounded;
         state.velY = 0;
         state.isGrounded = true;
         state.kartPitch = 0;
 
         // Si venía de una rampa / acrobacia: ¡Activar Mini Turbo de aterrizaje!
-        if (state.stuntActive || state.rampJumpBoost) {
+        if (wasAirborne && (state.stuntActive || state.rampJumpBoost)) {
           state.speed = Math.max(state.speed * 1.25, MAX_SPEED * 1.35);
           state.rampBoostTimer = 1.4; // Mini Turbo de rampa — NO toca fuel de K
           flames.forEach(f => {
@@ -2627,24 +2632,27 @@
             hudItemFx.style.animation = 'none';
             requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
           }
-        } else {
+        } else if (wasAirborne) {
           spawnPickupBurst(state.posX, 0.2, state.posZ);
         }
 
-        // Reset de acrobacia — forzar rotaciones a 0 para no arrastrar valores de lerp
-        state.stuntActive = false;
-        state.stuntType = null;
-        state.rampJumpBoost = false;
-        state.stuntProgress = 0;
-        state.stuntRotX = 0;
-        state.stuntRotY = 0;
-        state.stuntRotZ = 0;
-        // Resetear las rotaciones del grupo directamente para evitar drift acumulado
-        kartGroup.rotation.x = 0;
-        kartGroup.rotation.z = 0;
+        if (wasAirborne) {
+          // Reset de acrobacia — forzar rotaciones a 0 para no arrastrar valores de lerp
+          state.stuntActive = false;
+          state.stuntType = null;
+          state.rampJumpBoost = false;
+          state.stuntProgress = 0;
+          state.stuntRotX = 0;
+          state.stuntRotY = 0;
+          state.stuntRotZ = 0;
+          // Resetear las rotaciones del grupo directamente para evitar drift acumulado
+          kartGroup.rotation.x = 0;
+          kartGroup.rotation.z = 0;
+        }
+      } else {
+        // El kart está por encima del suelo → en el aire
+        state.isGrounded = false;
       }
-    } else {
-      state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0, 0.2);
     }
 
     // ── Movimiento ──
