@@ -376,7 +376,7 @@
       // Construir puntos de la curva del atajo (conexión suave en inicio y fin)
       const pts = [
         new THREE.Vector3(startSample.x, startSample.y || 0, startSample.z),
-        ...((sc.controlPoints || []).map(([x, y, z]) => new THREE.Vector3(x, y || 0, z))),
+        ...((sc.controlPoints || []).map(([x, y, z]) => new THREE.Vector3(x, getTerrainHeightAt(x, z), z))),
         new THREE.Vector3(endSample.x, endSample.y || 0, endSample.z)
       ];
       const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
@@ -1922,6 +1922,33 @@
     minimapCtx.strokeStyle = 'rgba(163,0,0,0.55)';
     minimapCtx.lineWidth = 2;
     minimapCtx.stroke();
+
+    // Atajos en el minimapa
+    for (const sc of shortcutTracks) {
+      if (!sc.samples || sc.samples.length === 0) continue;
+      
+      minimapCtx.beginPath();
+      for (let i = 0; i < sc.samples.length; i += step) {
+        const s = sc.samples[i];
+        const { mx, my } = worldToMinimap(s.x, s.z);
+        if (i === 0) minimapCtx.moveTo(mx, my);
+        else         minimapCtx.lineTo(mx, my);
+      }
+      minimapCtx.strokeStyle = 'rgba(255,255,255,0.18)';
+      minimapCtx.lineWidth = 7;
+      minimapCtx.stroke();
+
+      minimapCtx.beginPath();
+      for (let i = 0; i < sc.samples.length; i += step) {
+        const s = sc.samples[i];
+        const { mx, my } = worldToMinimap(s.x, s.z);
+        if (i === 0) minimapCtx.moveTo(mx, my);
+        else         minimapCtx.lineTo(mx, my);
+      }
+      minimapCtx.strokeStyle = 'rgba(0,102,153,0.7)'; // Línea central azul para atajos
+      minimapCtx.lineWidth = 2;
+      minimapCtx.stroke();
+    }
 
     // Obstáculos en minimapa con sus respectivos colores neón (solo si están activos)
     for (const obs of obstacles) {
