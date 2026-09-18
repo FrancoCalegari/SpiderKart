@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpiderKart — Error 404 | SpiderWebARG</title>
+
+  <!-- Google Fonts: Tactical System -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+  <!-- Theme script -->
+  <script src="/js/theme.js"></script>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/css/tactical.css">
+  <link rel="stylesheet" href="/css/index.css">
+  <link rel="icon" type="image/x-icon" href="/logo_blanco.ico">
+
+  <style>
+    .error-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+      padding: 2rem;
+      position: relative;
+      z-index: 10;
+    }
+    
+    .error-code {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 900;
+      font-size: 8rem;
+      line-height: 1;
+      color: var(--sw-red);
+      text-shadow: 0 0 40px rgba(163,0,0,0.5);
+      margin-bottom: 0.5rem;
+    }
+    
+    .error-message {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1.5rem;
+      color: #f5f5f5;
+      letter-spacing: 0.1em;
+      margin-bottom: 2rem;
+    }
+    
+    .error-details {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.9rem;
+      color: rgba(255,255,255,0.6);
+      margin-bottom: 3rem;
+      border: 1px solid rgba(163,0,0,0.3);
+      padding: 10px 20px;
+      clip-path: polygon(10px 0,100% 0,100% 100%,0 100%,0 10px);
+      background: rgba(0,0,0,0.5);
+    }
+  </style>
+</head>
+<body class="tac-page tactical-body">
+
+  <!-- Efectos de fondo -->
+  <div class="sw-scanlines"></div>
+  <div class="noise-overlay"></div>
+
+  <!-- HUD Corners -->
+  <div class="hud-corner hud-tl"><div class="hud-line h"></div><div class="hud-line v"></div></div>
+  <div class="hud-corner hud-tr" style="transform:scaleX(-1)"><div class="hud-line h"></div><div class="hud-line v" style="left:auto;right:0"></div></div>
+  <div class="hud-corner hud-bl" style="transform:scaleY(-1)"><div class="hud-line h" style="top:auto;bottom:0"></div><div class="hud-line v"></div></div>
+  <div class="hud-corner hud-br" style="transform:scale(-1)"><div class="hud-line h" style="top:auto;bottom:0"></div><div class="hud-line v" style="left:auto;right:0"></div></div>
+
+  <main class="error-container">
+    <div class="eyebrow-tag">
+      <span class="sw-pulse" style="background:var(--sw-red);"></span>&nbsp; FALLA DEL SISTEMA
+    </div>
+    
+    <h1 class="error-code">404</h1>
+    <h2 class="error-message">PÁGINA NO ENCONTRADA</h2>
+    
+    <div class="error-details">
+      <i class="fa-solid fa-triangle-exclamation" style="color:var(--sw-red);"></i> 
+      LA RUTA SOLICITADA NO EXISTE EN LOS REGISTROS
+    </div>
+    
+    <a href="/" class="sw-btn sw-btn--primary sw-btn--lg">
+      <i class="fa-solid fa-house"></i> VOLVER A LA BASE
+    </a>
+  </main>
+
+</body>
+</html>

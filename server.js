@@ -744,6 +744,11 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => handleLeave(socket));
 });
 
+// Middleware para manejar 404
+app.use((req, res, next) => {
+    res.status(404).sendFile(join(__dirname, 'public', '404.html'));
+});
+
 server.listen(PORT, () => {
     console.log(`Servidor HTTP y WebSocket corriendo en el puerto ${PORT}`);
 });
