@@ -515,6 +515,7 @@
     buildRamps(levelRamps || null);
     buildPowerups(levelPowerups || null);
     buildShortcuts(levelShortcuts || null);
+    updateMinimapBounds(); // Re-calcular bounds incluyendo atajos
     buildTerrainNodes(levelTerrainNodes || null);
     buildManualBarriers();
     if (typeof kartGroup !== 'undefined') {
@@ -996,6 +997,7 @@
         spawnPowerup(sampleIdx, lane, defaultTypes[i % 3]);
       }
     }
+
   }
   buildPowerups();
 
@@ -1866,6 +1868,13 @@
       if (s.x < mmMinX) mmMinX = s.x; if (s.x > mmMaxX) mmMaxX = s.x;
       if (s.z < mmMinZ) mmMinZ = s.z; if (s.z > mmMaxZ) mmMaxZ = s.z;
     });
+    // También incluir los atajos para que no queden fuera del minimapa
+    for (const sc of shortcutTracks) {
+      for (const s of sc.samples) {
+        if (s.x < mmMinX) mmMinX = s.x; if (s.x > mmMaxX) mmMaxX = s.x;
+        if (s.z < mmMinZ) mmMinZ = s.z; if (s.z > mmMaxZ) mmMaxZ = s.z;
+      }
+    }
     // Mantener aspect ratio cuadrado para que la pista no se deforme
     const rangeX = mmMaxX - mmMinX;
     const rangeZ = mmMaxZ - mmMinZ;
