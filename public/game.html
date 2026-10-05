@@ -328,6 +328,80 @@
       to   { opacity: 1;   transform: translate(-50%,-50%) scale(1.04); }
     }
 
+    /* Indicador de atajo */
+    #hud-shortcut {
+      position: absolute; top: 22%; left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex; align-items: center; gap: 10px;
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1.5rem; font-weight: 900; letter-spacing: 0.3em;
+      color: #00d4ff;
+      text-shadow: 0 0 24px rgba(0,212,255,0.9), 0 0 50px rgba(0,212,255,0.5);
+      animation: shortcutPulse 0.6s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+    #hud-shortcut.hidden { display: none; }
+    #hud-shortcut i { font-size: 1.2rem; }
+    @keyframes shortcutPulse {
+      from { opacity: 0.75; text-shadow: 0 0 18px rgba(0,212,255,0.7); }
+      to   { opacity: 1;    text-shadow: 0 0 36px rgba(0,212,255,1.0), 0 0 70px rgba(0,212,255,0.5); }
+    }
+
+    /* Contador fuera de pista */
+    #hud-offroad {
+      position: absolute; top: 55%; left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      pointer-events: none;
+    }
+    #hud-offroad.hidden { display: none; }
+    .offroad-label {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1.4rem; font-weight: 900; letter-spacing: 0.28em;
+      color: #ff8800;
+      text-shadow: 0 0 28px rgba(255,136,0,0.85);
+      animation: offroadPulse 0.45s ease-in-out infinite alternate;
+    }
+    .offroad-timer-row {
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .offroad-countdown {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 4rem; font-weight: 900; line-height: 1;
+      color: #ffcc00;
+      text-shadow: 0 0 40px rgba(255,204,0,0.95), 0 0 80px rgba(255,102,0,0.5);
+      min-width: 90px; text-align: center;
+    }
+    .offroad-countdown.urgent {
+      color: #ff3300;
+      text-shadow: 0 0 40px rgba(255,51,0,0.95), 0 0 80px rgba(255,0,0,0.5);
+      animation: urgentShake 0.15s linear infinite alternate;
+    }
+    .offroad-unit {
+      font-size: 0.7rem; color: rgba(255,200,0,0.6); letter-spacing: 0.15em;
+    }
+    .offroad-bar-wrap {
+      width: 200px; height: 6px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,136,0,0.3);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .offroad-bar {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #00ff88, #ffcc00, #ff4400);
+      border-radius: 3px;
+      transition: width 0.1s linear;
+    }
+    @keyframes offroadPulse {
+      from { opacity: 0.65; transform: scale(0.97); }
+      to   { opacity: 1;    transform: scale(1.03); }
+    }
+    @keyframes urgentShake {
+      from { transform: translateX(-2px); }
+      to   { transform: translateX(2px); }
+    }
+
     /* Drift indicator */
     #hud-drift {
       position: absolute; bottom: 80px; left: 50%;
@@ -628,6 +702,24 @@
       SENTIDO CONTRARIO
       <div class="wrong-way-bar-wrap"><div class="wrong-way-bar" id="wrong-way-bar"></div></div>
     </div>
+
+    <!-- Indicador de atajo (shortcut) -->
+    <div id="hud-shortcut" class="hidden">
+      <i class="fa-solid fa-scissors"></i> ATAJO
+    </div>
+
+    <!-- Contador fuera de pista -->
+    <div id="hud-offroad" class="hidden">
+      <div class="offroad-label">FUERA DE PISTA</div>
+      <div class="offroad-timer-row">
+        <div class="offroad-countdown" id="offroad-countdown-num">3.0</div>
+        <div class="offroad-unit">SEG</div>
+      </div>
+      <div class="offroad-bar-wrap">
+        <div class="offroad-bar" id="offroad-bar"></div>
+      </div>
+    </div>
+
     <div id="hud-drift" class="hidden">
       DERRAPE
       <div class="drift-bar-wrap"><div class="drift-bar" id="drift-bar"></div></div>

@@ -1768,6 +1768,10 @@
   const hudLapAnnounce  = document.getElementById('hud-lap-announce');
   const lapAnnounceNum  = document.getElementById('lap-announce-num');
   const lapAnnounceLabel= document.getElementById('lap-announce-label');
+  const hudShortcut     = document.getElementById('hud-shortcut');
+  const hudOffroad      = document.getElementById('hud-offroad');
+  const offroadCountdownNum = document.getElementById('offroad-countdown-num');
+  const offroadBar      = document.getElementById('offroad-bar');
   let lapAnnounceTimer  = null;
 
   function showLapAnnounce(lap, totalLaps) {
@@ -2018,9 +2022,8 @@
     minimapCtx.fill();
   }
 
-  /* ──────────────────────────────────────────
-     Track collision + progreso de vuelta
-  ────────────────────────────────────────── */
+  const TELEPORT_DELAY = 3.0; // segundos antes de teleportar al último checkpoint
+
   function resolveTrackCollision(dt) {
     // ── 1. Buscar punto más cercano en la pista PRINCIPAL ──
     let bestIdx = -1;
@@ -2114,7 +2117,7 @@
 
     if (nowWrongWay || state.isOffRoad) {
       state.wrongWayTimer += dt;
-      if (state.wrongWayTimer >= 2.5) {
+      if (state.wrongWayTimer >= TELEPORT_DELAY) {
         // Teleportar al checkpoint válido
         const lastCpIdx = ((state.nextCheckpoint - 1) + CHECKPOINT_COUNT) % CHECKPOINT_COUNT;
         const lastCp = checkpoints[lastCpIdx];
@@ -2823,7 +2826,22 @@
 
     // Sentido contrario + barra de temporizador
     if (hudWrongWay) hudWrongWay.classList.toggle('hidden', !state.isWrongWay);
-    if (wrongWayBar) wrongWayBar.style.width = Math.min(state.wrongWayTimer / 5.0 * 100, 100) + '%';
+    if (wrongWayBar) wrongWayBar.style.width = Math.min(state.wrongWayTimer / TELEPORT_DELAY * 100, 100) + '%';
+
+    // ── Indicador de Atajo ──
+    if (hudShortcut) hudShortcut.classList.toggle('hidden', !state.onShortcut);
+
+    // ── Contador Fuera de Pista ──
+    const showOffroad = state.isOffRoad && !state.isWrongWay;
+    if (hudOffroad) hudOffroad.classList.toggle('hidden', !showOffroad);
+    if (showOffroad) {
+      const remaining = Math.max(0, TELEPORT_DELAY - state.wrongWayTimer);
+      if (offroadCountdownNum) {
+        offroadCountdownNum.textContent = remaining.toFixed(1);
+        offroadCountdownNum.classList.toggle('urgent', remaining < 1.0);
+      }
+      if (offroadBar) offroadBar.style.width = Math.min(100, (state.wrongWayTimer / TELEPORT_DELAY) * 100) + '%';
+    }
 
     // Indicador de drift
     if (hudDrift) {
