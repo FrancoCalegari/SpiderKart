@@ -834,7 +834,33 @@
   </script>
 
   <!-- Motor de juego -->
-  <script src="/socket.io/socket.io.js"></script>
+  <!--
+    DEPLOY EN VERCEL: El servidor de Vercel es serverless y no soporta WebSockets.
+    Para el multijugador en tiempo real, despliega server.js en Railway/Render/Fly.io
+    y añade a Vercel la variable de entorno NEXT_PUBLIC_WS_URL (o inserta tu URL abajo).
+    Si no hay servidor WS, el juego funciona en modo individual (sin red).
+  -->
+  <script>
+    // URL del servidor WebSocket con multiplayer completo.
+    // Se configura en Vercel via variables de entorno inyectadas en build, o se puede
+    // sobreescribir aquí con la URL de tu servidor dedicado (Railway, Render, Fly.io, etc.).
+    window.SPIDERKART_WS_URL = '%%SPIDERKART_WS_URL%%' !== '%%SPIDERKART_WS_URL%%'
+      ? '%%SPIDERKART_WS_URL%%'
+      : null; // null = intentar conectar al mismo host (funciona en local y en servidor dedicado)
+  </script>
+  <script>
+    // Carga socket.io desde el servidor WS si está configurado; si no, del host actual.
+    (function() {
+      const wsHost = window.SPIDERKART_WS_URL || '';
+      const s = document.createElement('script');
+      s.src = wsHost ? wsHost.replace(/\/$/, '') + '/socket.io/socket.io.js' : '/socket.io/socket.io.js';
+      s.onerror = function() {
+        // Socket.io no disponible — multiplayer.js ya maneja este caso en silencio.
+        console.warn('[SpiderKart] socket.io no disponible. Modo sin multijugador activo.');
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
   <script src="js/game-engine.js"></script>
   <script src="js/multiplayer.js"></script>
 </body>

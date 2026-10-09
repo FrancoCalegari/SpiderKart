@@ -3,3 +3,5 @@
 /package-lock.json
 /levels.json
 /levels_slots.json
+*.bak
+.vercel
