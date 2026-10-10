@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  # 1. El servidor Node.js (SpiderKart)
+  spiderkart-app:
+    build: .
+    container_name: spiderkart-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+
+  # 2. El Túnel de Cloudflare
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: spiderkart-tunnel
+    restart: unless-stopped
+    # El túnel usará el token que pongas en tu archivo .env
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel run
+    depends_on:
+      - spiderkart-app
