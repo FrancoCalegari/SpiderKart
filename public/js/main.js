@@ -35,32 +35,60 @@ window.addEventListener('scroll', () => {
 });
 
 // Cargar Leaderboard
-async function loadLeaderboard() {
+window.currentLeaderboardType = 'undercode';
+async function loadLeaderboard(type = window.currentLeaderboardType) {
+    window.currentLeaderboardType = type;
     const listContainer = document.getElementById('leaderboard-list');
     listContainer.innerHTML = '<tr><td colspan="3"><div class="lb-spinner-wrap"><div class="sw-spinner"></div> Cargando...</div></td></tr>';
+    
+    // UI Tab highlighting
+    ['undercode', 'multi', 'laps'].forEach(t => {
+        const b = document.getElementById(`btn-lb-${t}`);
+        if(b) {
+            b.style.background = 'transparent'; 
+            b.style.border = 'none';
+        }
+    });
+    const activeBtn = document.getElementById(`btn-lb-${type}`);
+    if(activeBtn) { 
+        activeBtn.style.background = 'rgba(255,255,255,0.1)'; 
+        activeBtn.style.border = '1px solid var(--neon-accent)'; 
+    }
+
     try {
-        const response = await fetch('/api/leaderboard');
-        const data = await response.json();
+        let endpoint = '/api/undercode-day-winners';
+        if (type === 'multi') endpoint = '/api/leaderboard/multiplayer';
+        else if (type === 'laps') endpoint = '/api/leaderboard/laps/Mapa Principal';
         
-        if (data.data && data.data.length > 0) {
+        const response = await fetch(endpoint);
+        const data = await response.json();
+        const items = data.winners || data.data || [];
+        
+        if (items.length > 0) {
             listContainer.innerHTML = '';
-            data.data.forEach((item, index) => {
+            items.forEach((item, index) => {
                 const tr = document.createElement('tr');
-                let rankHtml;
-                if (index === 0) {
-                    rankHtml = '<i class="fa-solid fa-trophy" style="color:#FFD700;"></i>';
-                } else if (index === 1) {
-                    rankHtml = '<i class="fa-solid fa-trophy" style="color:#C0C0C0;"></i>';
-                } else if (index === 2) {
-                    rankHtml = '<i class="fa-solid fa-trophy" style="color:#CD7F32;"></i>';
-                } else {
-                    rankHtml = `#${index + 1}`;
+                let rankHtml = index === 0 ? '<i class="fa-solid fa-trophy" style="color:#FFD700;"></i>' : 
+                               index === 1 ? '<i class="fa-solid fa-trophy" style="color:#C0C0C0;"></i>' :
+                               index === 2 ? '<i class="fa-solid fa-trophy" style="color:#CD7F32;"></i>' : `#${index + 1}`;
+                
+                let scoreText = item.score || item.total_wins || item.wins || '0';
+                let postfix = ' PTS';
+                if (type === 'laps' && item.lap_time_ms) {
+                    const ms = item.lap_time_ms;
+                    const m = Math.floor(ms / 60000);
+                    const s = Math.floor((ms % 60000) / 1000);
+                    const mil = Math.floor(ms % 1000);
+                    scoreText = `${m}:${String(s).padStart(2,'0')}.${String(mil).padStart(3,'0')}`;
+                    postfix = '';
+                } else if (type === 'multi') {
+                    postfix = ' Víc.';
                 }
                 
                 tr.innerHTML = `
                     <td>${rankHtml}</td>
                     <td>${item.username}</td>
-                    <td style="color:var(--sw-red); font-weight:bold;">${item.score} PTS</td>
+                    <td style="color:var(--sw-red); font-weight:bold;">${scoreText}${postfix}</td>
                 `;
                 listContainer.appendChild(tr);
             });

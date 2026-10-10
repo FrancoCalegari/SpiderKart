@@ -537,6 +537,21 @@
       case 'race_results':
         race.phase = 'finished';
         renderResults(msg.results, msg.saved);
+        
+        // INTEGRACIÓN TORNEO UNDERCODE: Registrar victoria si somos 1ros
+        const myUserId = localStorage.getItem('spiderkart_userId');
+        const winner = msg.results[0];
+        if (winner && winner.id === playerId && myUserId) {
+            const mapName = window.currentMapName || 'Mapa Principal';
+            fetch('/api/multiplayer-win', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: myUserId, mapName: mapName })
+            })
+            .then(r => r.json())
+            .then(data => console.log('[Torneo] Victoria registrada:', data))
+            .catch(e => console.error(e));
+        }
         break;
 
       case 'state':

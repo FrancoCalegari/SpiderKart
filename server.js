@@ -281,13 +281,26 @@ app.get('/api/init-db', async (req, res) => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `;
-        const queryLeaderboard = `
-            CREATE TABLE IF NOT EXISTS leaderboard (
+        const queryBestLaps = `
+            CREATE TABLE IF NOT EXISTS best_laps (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id INT,
-                score INT NOT NULL,
+                map_name VARCHAR(50) NOT NULL,
+                lap_time_ms INT NOT NULL,
                 recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE KEY unique_user_map (user_id, map_name)
+            );
+        `;
+        const queryMultiplayerStats = `
+            CREATE TABLE IF NOT EXISTS multiplayer_stats (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT,
+                map_name VARCHAR(50) NOT NULL,
+                wins INT DEFAULT 1,
+                last_win_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE KEY unique_user_map_multi (user_id, map_name)
             );
         `;
         await executeQuery(queryUsers);
@@ -296,7 +309,8 @@ app.get('/api/init-db', async (req, res) => {
         } catch (e) {
             console.log('[DB] Nota: Columna email ya existe o no se pudo crear en este paso.');
         }
-        await executeQuery(queryLeaderboard);
+        await executeQuery(queryBestLaps);
+        await executeQuery(queryMultiplayerStats);
         res.json({ message: 'Tablas inicializadas correctamente' });
     } catch (error) {
         console.error(error);
@@ -415,14 +429,63 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// Endpoint de Leaderboard
-app.get('/api/leaderboard', async (req, res) => {
+// Endpoint para registrar mejor vuelta (Time Trial)
+app.post('/api/best-lap', async (req, res) => {
+    const { userId, mapName, lapTimeMs } = req.body;
+    try {
+        if (!userId || !mapName || !lapTimeMs) return res.status(400).json({ error: 'Faltan datos' });
+        
+        const checkQuery = `SELECT lap_time_ms FROM best_laps WHERE user_id = ${userId} AND map_name = '${mapName}'`;
+        const checkResult = await executeQuery(checkQuery);
+        
+        if (checkResult.result && checkResult.result.length > 0) {
+            const currentBest = checkResult.result[0].lap_time_ms;
+            if (lapTimeMs < currentBest) {
+                await executeQuery(`UPDATE best_laps SET lap_time_ms = ${lapTimeMs}, recorded_at = CURRENT_TIMESTAMP WHERE user_id = ${userId} AND map_name = '${mapName}'`);
+                return res.json({ message: 'Nuevo récord personal registrado', updated: true });
+            } else {
+                return res.json({ message: 'No superó su mejor tiempo', updated: false });
+            }
+        } else {
+            await executeQuery(`INSERT INTO best_laps (user_id, map_name, lap_time_ms) VALUES (${userId}, '${mapName}', ${lapTimeMs})`);
+            return res.status(201).json({ message: 'Primer tiempo registrado', updated: true });
+        }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error guardando tiempo' });
+    }
+});
+
+// Endpoint para registrar victoria en multijugador
+app.post('/api/multiplayer-win', async (req, res) => {
+    const { userId, mapName } = req.body;
+    try {
+        if (!userId || !mapName) return res.status(400).json({ error: 'Faltan datos' });
+        
+        const checkQuery = `SELECT wins FROM multiplayer_stats WHERE user_id = ${userId} AND map_name = '${mapName}'`;
+        const checkResult = await executeQuery(checkQuery);
+        
+        if (checkResult.result && checkResult.result.length > 0) {
+            await executeQuery(`UPDATE multiplayer_stats SET wins = wins + 1, last_win_at = CURRENT_TIMESTAMP WHERE user_id = ${userId} AND map_name = '${mapName}'`);
+        } else {
+            await executeQuery(`INSERT INTO multiplayer_stats (user_id, map_name, wins) VALUES (${userId}, '${mapName}', 1)`);
+        }
+        res.json({ message: 'Victoria registrada' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error guardando victoria' });
+    }
+});
+
+// Endpoint de Leaderboard Tiempos
+app.get('/api/leaderboard/laps/:mapName', async (req, res) => {
     try {
         const query = `
-            SELECT u.username, l.score, l.recorded_at 
-            FROM leaderboard l
-            JOIN users u ON l.user_id = u.id
-            ORDER BY l.score DESC
+            SELECT u.username, b.lap_time_ms, b.recorded_at 
+            FROM best_laps b
+            JOIN users u ON b.user_id = u.id
+            WHERE b.map_name = '${req.params.mapName}'
+            ORDER BY b.lap_time_ms ASC
             LIMIT 10
         `;
         const result = await executeQuery(query);
@@ -433,16 +496,78 @@ app.get('/api/leaderboard', async (req, res) => {
     }
 });
 
-// Para enviar un score (útil para pruebas)
-app.post('/api/leaderboard', async (req, res) => {
-    const { userId, score } = req.body;
+// Endpoint de Leaderboard Victorias (Global o por mapa)
+app.get('/api/leaderboard/multiplayer', async (req, res) => {
     try {
-        const insertQuery = `INSERT INTO leaderboard (user_id, score) VALUES (${userId}, ${score})`;
-        await executeQuery(insertQuery);
-        res.status(201).json({ message: 'Score registrado exitosamente' });
+        const mapName = req.query.map;
+        let query = "";
+        if (mapName) {
+            query = `
+                SELECT u.username, m.wins, m.last_win_at 
+                FROM multiplayer_stats m
+                JOIN users u ON m.user_id = u.id
+                WHERE m.map_name = '${mapName}'
+                ORDER BY m.wins DESC
+                LIMIT 10
+            `;
+        } else {
+            query = `
+                SELECT u.username, SUM(m.wins) as total_wins
+                FROM multiplayer_stats m
+                JOIN users u ON m.user_id = u.id
+                GROUP BY m.user_id, u.username
+                ORDER BY total_wins DESC
+                LIMIT 10
+            `;
+        }
+        const result = await executeQuery(query);
+        res.json({ data: result.result || [] });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Error guardando score' });
+        res.status(500).json({ error: 'Error obteniendo leaderboard' });
+    }
+});
+
+// Endpoint Undercode Day Winners
+app.get('/api/undercode-day-winners', async (req, res) => {
+    try {
+        const mapsResult = await executeQuery("SELECT DISTINCT map_name FROM best_laps");
+        const maps = (mapsResult.result || []).map(m => m.map_name);
+        
+        const points = {};
+        
+        for (const mapName of maps) {
+            const lapsResult = await executeQuery(`
+                SELECT u.username 
+                FROM best_laps b JOIN users u ON b.user_id = u.id 
+                WHERE b.map_name = '${mapName}' 
+                ORDER BY b.lap_time_ms ASC LIMIT 3
+            `);
+            const top = lapsResult.result || [];
+            if (top[0]) points[top[0].username] = (points[top[0].username] || 0) + 50;
+            if (top[1]) points[top[1].username] = (points[top[1].username] || 0) + 30;
+            if (top[2]) points[top[2].username] = (points[top[2].username] || 0) + 15;
+        }
+        
+        const winsResult = await executeQuery(`
+            SELECT u.username, SUM(m.wins) as total_wins
+            FROM multiplayer_stats m JOIN users u ON m.user_id = u.id
+            GROUP BY m.user_id, u.username
+        `);
+        const wins = winsResult.result || [];
+        for (const w of wins) {
+            points[w.username] = (points[w.username] || 0) + (w.total_wins * 10);
+        }
+        
+        const sortedWinners = Object.keys(points)
+            .map(username => ({ username, score: points[username] }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5);
+            
+        res.json({ winners: sortedWinners });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error calculando ganadores' });
     }
 });
 

@@ -264,12 +264,16 @@
         <h2 class="section-title">TOP <span class="text-accent">PILOTOS</span></h2>
 
         <div class="terminal-panel">
-          <div class="terminal-header">
+          <div class="terminal-header" style="gap: 15px;">
             <div class="terminal-dots">
               <span class="t-dot red"></span><span class="t-dot yellow"></span><span class="t-dot green"></span>
             </div>
-            <span class="terminal-label">ranking.sql — en vivo</span>
-            <button class="lb-refresh-btn" onclick="loadLeaderboard()">
+            <div style="display: flex; gap: 10px; margin-left: 10px; overflow-x: auto;">
+              <button class="lb-refresh-btn" onclick="loadLeaderboard('undercode')" id="btn-lb-undercode" style="padding: 5px 10px; background: rgba(255,255,255,0.1); border: 1px solid var(--neon-accent); border-radius: 4px; cursor: pointer;">Top Undercode</button>
+              <button class="lb-refresh-btn" onclick="loadLeaderboard('multi')" id="btn-lb-multi" style="padding: 5px 10px; background: transparent; border: none; color: #fff; cursor: pointer;">PVP</button>
+              <button class="lb-refresh-btn" onclick="loadLeaderboard('laps')" id="btn-lb-laps" style="padding: 5px 10px; background: transparent; border: none; color: #fff; cursor: pointer;">Tiempos</button>
+            </div>
+            <button class="lb-refresh-btn" onclick="loadLeaderboard()" style="margin-left: auto;">
               <i class="fa-solid fa-arrows-rotate"></i>
             </button>
           </div>

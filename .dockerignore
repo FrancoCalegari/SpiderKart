@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.DS_Store
+.git
+.gitignore
+.env
+.env.example
+README.md
+CONTEXT.md
+DESIGN.md
+scratch_refactor.py
+plan_de_implementacion_torneo.md

@@ -575,6 +575,7 @@
     .then(r => r.json())
     .then(data => {
       if (!data || !Array.isArray(data.controlPoints) || data.controlPoints.length < 3) return;
+      window.currentMapName = data.name || 'Mapa Principal';
       // Aplicar totalLaps del nivel
       if (data.totalLaps && data.totalLaps >= 1) TOTAL_LAPS = data.totalLaps;
       const isDifferent = JSON.stringify(data.controlPoints) !== JSON.stringify(DEFAULT_CONTROL_POINTS);
@@ -1710,6 +1711,28 @@
     if (fsTotal) fsTotal.textContent = formatTime(totalTime);
     if (fsBest)  fsBest.textContent  = formatTime(state.bestLap);
     finishEl.classList.add('active');
+
+    // INTEGRACIÓN TORNEO UNDERCODE: Registrar mejor tiempo
+    const userId = localStorage.getItem('spiderkart_userId');
+    const mapName = window.currentMapName || 'Mapa Principal';
+    const finalLapTime = state.bestLap > 0 ? state.bestLap : totalTime;
+    if (userId && finalLapTime > 0) {
+        fetch('/api/best-lap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, mapName, lapTimeMs: finalLapTime })
+        })
+        .then(res => res.json())
+        .then(data => {
+            console.log('[Torneo] Registro de vuelta:', data);
+            if (data.updated) {
+                // Opcional: mostrar confeti o mensaje de nuevo récord
+                const fsTitle = document.querySelector('#finish-screen h1');
+                if (fsTitle) fsTitle.innerHTML += '<br><span style="color:gold;font-size:0.6em;">¡NUEVO RÉCORD PERSONAL!</span>';
+            }
+        })
+        .catch(err => console.error(err));
+    }
   }
 
   /* ──────────────────────────────────────────
