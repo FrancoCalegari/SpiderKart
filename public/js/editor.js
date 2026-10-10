@@ -1145,6 +1145,8 @@
     if (controlPoints.length < 2) { drawNoPointsHint(); return; }
     const spline = buildSpline(controlPoints, true, 20);
     drawTrackFill(spline);
+    // Atajos se dibujan ANTES de la línea roja para que queden debajo
+    drawShortcuts();
     // Línea central roja
     ctx.beginPath();
     spline.forEach((p, i) => {
@@ -1156,7 +1158,6 @@
     ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 5 / zoom;
     ctx.stroke(); ctx.shadowBlur = 0;
     
-    drawShortcuts();
     if (controlPoints.length > 0) drawStartLine(spline);
     drawPowerups(spline);
     drawObstacles(spline);
@@ -1192,11 +1193,46 @@
     ctx.strokeStyle = '#006699';
     for (const sc of editorShortcuts) {
       if (!sc.controlPoints || sc.controlPoints.length === 0) continue;
-      // Convertir índices a coordenadas aproximadas
       const startP = getTrackWorldPoint(sc.startSampleIdx);
       const endP   = getTrackWorldPoint(sc.endSampleIdx);
       if (!startP || !endP) continue;
-      const pts = [startP, ...sc.controlPoints.map(p => ({ x: p[0], z: p[2] })), endP];
+
+      // Calcular la normal del punto de inicio/fin para anclar al borde de la pista
+      // (igual que hace game-engine.js) usando trackWidth como mitad del ancho
+      const hw = trackWidth; // unidades editor ≈ HALF_WIDTH del motor
+      const firstCP = sc.controlPoints[0];
+      const lastCP  = sc.controlPoints[sc.controlPoints.length - 1];
+
+      // Normal del inicio: perpendicular de la spline en ese punto
+      // Aproximar la normal como perpendicular al vector tangente al punto de inicio
+      const splineAll = buildSpline(controlPoints, true, 20);
+      const totalSp = splineAll.length;
+      const startIdx = Math.round((sc.startSampleIdx / 600) * (totalSp - 1));
+      const endIdx   = Math.round((sc.endSampleIdx   / 600) * (totalSp - 1));
+      const sp1 = splineAll[Math.max(0, startIdx - 1)];
+      const sp2 = splineAll[Math.min(totalSp - 1, startIdx + 1)];
+      const sp3 = splineAll[Math.max(0, endIdx - 1)];
+      const sp4 = splineAll[Math.min(totalSp - 1, endIdx + 1)];
+
+      const tanStartX = sp2.x - sp1.x, tanStartZ = sp2.z - sp1.z;
+      const tanStartLen = Math.sqrt(tanStartX*tanStartX + tanStartZ*tanStartZ) || 1;
+      const normStartX = -tanStartZ / tanStartLen, normStartZ = tanStartX / tanStartLen;
+
+      const tanEndX = sp4.x - sp3.x, tanEndZ = sp4.z - sp3.z;
+      const tanEndLen = Math.sqrt(tanEndX*tanEndX + tanEndZ*tanEndZ) || 1;
+      const normEndX = -tanEndZ / tanEndLen, normEndZ = tanEndX / tanEndLen;
+
+      // Determinar lado (hacia donde va el primer punto de control)
+      const toFirstX = firstCP[0] - startP.x, toFirstZ = firstCP[2] - startP.z;
+      const sideStart = (toFirstX * normStartX + toFirstZ * normStartZ) >= 0 ? 1 : -1;
+
+      const toEndX = endP.x - lastCP[0], toEndZ = endP.z - lastCP[2];
+      const sideEnd = (toEndX * normEndX + toEndZ * normEndZ) >= 0 ? 1 : -1;
+
+      const anchorStart = { x: startP.x + normStartX * hw * sideStart, z: startP.z + normStartZ * hw * sideStart };
+      const anchorEnd   = { x: endP.x   + normEndX   * hw * sideEnd,   z: endP.z   + normEndZ   * hw * sideEnd   };
+
+      const pts = [anchorStart, ...sc.controlPoints.map(p => ({ x: p[0], z: p[2] })), anchorEnd];
       const scSpline = buildSpline(pts, false, 15);
       
       ctx.beginPath();

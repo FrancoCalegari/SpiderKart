@@ -183,40 +183,46 @@
       color: 0x140912, roughness: 1, metalness: 0,
       emissive: 0x22040a, emissiveIntensity: 0.25
     });
-    // Calcular bounding box de la pista para saber dónde NO colocar montañas
-    const MIN_DIST_FROM_TRACK = 80; // unidades de mundo
-    const MIN_DIST_SQ = MIN_DIST_FROM_TRACK * MIN_DIST_FROM_TRACK;
-    // Usamos una versión sparse de trackSamples (cada 20 muestras) para rendimiento
-    const sparseSamples = trackSamples.filter((_, i) => i % 20 === 0);
+    // Distancia mínima desde el centro de la pista (incluye el ancho de la pista + margen)
+    const MIN_DIST_FROM_TRACK = HALF_WIDTH + 90; // unidades de mundo
+    // Usamos una versión sparse de trackSamples (cada 10 muestras) para mayor precisión
+    const sparseSamples = trackSamples.filter((_, i) => i % 10 === 0);
 
-    function isTooCloseToTrack(px, pz) {
+    // Verifica que el cono (con su propio radio) no esté cerca de ningún punto de la pista
+    function isTooCloseToTrack(px, pz, coneRadius) {
+      const minDist = MIN_DIST_FROM_TRACK + coneRadius;
+      const minDistSq = minDist * minDist;
       for (const s of sparseSamples) {
         const dx = px - s.x, dz = pz - s.z;
-        if (dx * dx + dz * dz < MIN_DIST_SQ) return true;
+        if (dx * dx + dz * dz < minDistSq) return true;
       }
       return false;
     }
 
-    // Calcular radio exterior de la pista para colocar montañas
-    let maxTrackRadius = 0;
+    // Calcular bounding box real de la pista (no sólo radio polar)
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const s of sparseSamples) {
-      const r = Math.sqrt(s.x * s.x + s.z * s.z);
-      if (r > maxTrackRadius) maxTrackRadius = r;
+      if (s.x < minX) minX = s.x;
+      if (s.x > maxX) maxX = s.x;
+      if (s.z < minZ) minZ = s.z;
+      if (s.z > maxZ) maxZ = s.z;
     }
-    const MIN_RADIUS = maxTrackRadius + MIN_DIST_FROM_TRACK;
-    const MAX_RADIUS = MIN_RADIUS + 400;
+    const margin = MIN_DIST_FROM_TRACK + 150;
+    const spawnMinX = minX - margin;
+    const spawnMaxX = maxX + margin;
+    const spawnMinZ = minZ - margin;
+    const spawnMaxZ = maxZ + margin;
 
     let placed = 0;
     let attempts = 0;
-    while (placed < 40 && attempts < 300) {
+    while (placed < 40 && attempts < 600) {
       attempts++;
-      const a = Math.random() * Math.PI * 2;
-      const r = MIN_RADIUS + Math.random() * (MAX_RADIUS - MIN_RADIUS);
-      const px = Math.cos(a) * r;
-      const pz = Math.sin(a) * r;
-      if (isTooCloseToTrack(px, pz)) continue;
+      const px = spawnMinX + Math.random() * (spawnMaxX - spawnMinX);
+      const pz = spawnMinZ + Math.random() * (spawnMaxZ - spawnMinZ);
       const h = 32 + Math.random() * 60;
       const rad = 22 + Math.random() * 30;
+      // Rechazar si el cono (con su radio) queda demasiado cerca de la pista
+      if (isTooCloseToTrack(px, pz, rad)) continue;
       const geo = new THREE.ConeGeometry(rad, h, 6);
       const m = new THREE.Mesh(geo, mountMat);
       m.position.set(px, h / 2 - 3, pz);
@@ -373,11 +379,46 @@
       const startSample = trackSamples[Math.min(sc.startSampleIdx, trackSamples.length - 1)];
       const endSample   = trackSamples[Math.min(sc.endSampleIdx,   trackSamples.length - 1)];
 
+      // Desplazar los puntos de anclaje al BORDE de la pista principal
+      // para que el atajo no cruce la línea central roja.
+      // Determinamos la dirección de salida usando el primer punto de control.
+      const controlPts = sc.controlPoints || [];
+      let startAnchor, endAnchor;
+      if (controlPts.length > 0) {
+        // Dirección del primer punto de control respecto al inicio de la pista
+        const firstCP = controlPts[0];
+        const toFirst = new THREE.Vector3(
+          firstCP[0] - startSample.x, 0, firstCP[2] - startSample.z
+        ).normalize();
+        // Proyectar sobre la normal de la pista para saber si va a izquierda o derecha
+        const sideStart = toFirst.dot(startSample.normal) >= 0 ? 1 : -1;
+        startAnchor = new THREE.Vector3(
+          startSample.x + startSample.normal.x * HALF_WIDTH * sideStart,
+          startSample.y || 0,
+          startSample.z + startSample.normal.z * HALF_WIDTH * sideStart
+        );
+
+        // Para el fin: dirección del último punto de control respecto al final de la pista
+        const lastCP = controlPts[controlPts.length - 1];
+        const toEnd = new THREE.Vector3(
+          endSample.x - lastCP[0], 0, endSample.z - lastCP[2]
+        ).normalize();
+        const sideEnd = toEnd.dot(endSample.normal) >= 0 ? 1 : -1;
+        endAnchor = new THREE.Vector3(
+          endSample.x + endSample.normal.x * HALF_WIDTH * sideEnd,
+          endSample.y || 0,
+          endSample.z + endSample.normal.z * HALF_WIDTH * sideEnd
+        );
+      } else {
+        startAnchor = new THREE.Vector3(startSample.x, startSample.y || 0, startSample.z);
+        endAnchor   = new THREE.Vector3(endSample.x,   endSample.y   || 0, endSample.z);
+      }
+
       // Construir puntos de la curva del atajo (conexión suave en inicio y fin)
       const pts = [
-        new THREE.Vector3(startSample.x, startSample.y || 0, startSample.z),
-        ...((sc.controlPoints || []).map(([x, y, z]) => new THREE.Vector3(x, getTerrainHeightAt(x, z), z))),
-        new THREE.Vector3(endSample.x, endSample.y || 0, endSample.z)
+        startAnchor,
+        ...((controlPts).map(([x, y, z]) => new THREE.Vector3(x, getTerrainHeightAt(x, z), z))),
+        endAnchor
       ];
       const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
 
@@ -1909,7 +1950,7 @@
     minimapCtx.fillStyle = 'rgba(5,5,12,0.85)';
     minimapCtx.fillRect(0, 0, cw, ch);
 
-    // Trazado del circuito
+    // Trazado del circuito (borde blanco semitransparente)
     minimapCtx.beginPath();
     const step = 4; // saltear samples para no dibujar cada uno
     for (let i = 0; i < TRACK_SAMPLES; i += step) {
@@ -1923,20 +1964,7 @@
     minimapCtx.lineWidth = 7;
     minimapCtx.stroke();
 
-    // Línea central roja
-    minimapCtx.beginPath();
-    for (let i = 0; i < TRACK_SAMPLES; i += step) {
-      const s = trackSamples[i];
-      const { mx, my } = worldToMinimap(s.x, s.z);
-      if (i === 0) minimapCtx.moveTo(mx, my);
-      else         minimapCtx.lineTo(mx, my);
-    }
-    minimapCtx.closePath();
-    minimapCtx.strokeStyle = 'rgba(163,0,0,0.55)';
-    minimapCtx.lineWidth = 2;
-    minimapCtx.stroke();
-
-    // Atajos en el minimapa
+    // Atajos en el minimapa (se dibujan ANTES de la línea roja principal)
     for (const sc of shortcutTracks) {
       if (!sc.samples || sc.samples.length === 0) continue;
       
@@ -1962,6 +1990,19 @@
       minimapCtx.lineWidth = 2;
       minimapCtx.stroke();
     }
+
+    // Línea central roja (encima de atajos)
+    minimapCtx.beginPath();
+    for (let i = 0; i < TRACK_SAMPLES; i += step) {
+      const s = trackSamples[i];
+      const { mx, my } = worldToMinimap(s.x, s.z);
+      if (i === 0) minimapCtx.moveTo(mx, my);
+      else         minimapCtx.lineTo(mx, my);
+    }
+    minimapCtx.closePath();
+    minimapCtx.strokeStyle = 'rgba(163,0,0,0.55)';
+    minimapCtx.lineWidth = 2;
+    minimapCtx.stroke();
 
     // Obstáculos en minimapa con sus respectivos colores neón (solo si están activos)
     for (const obs of obstacles) {
