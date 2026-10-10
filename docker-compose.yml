@@ -9,7 +9,8 @@ services:
     env_file:
       - .env
     ports:
-      - "3000:3000"
+      - "3005:3000"
+
 
   # 2. El Túnel de Cloudflare
   cloudflared:
