@@ -43,11 +43,15 @@
   let selectedRampIdx = -1;  // índice en editorRamps
   let selectedPowerupIdx = -1; // índice en editorPowerups
   let selectedShortcutIdx = -1; // índice en editorShortcuts
-  let selectedShortcutPoint = null; // { type: 'start' | 'end' | 'cp', cpIdx: 0 }
-  let hoverShortcutPoint = null; // { sIdx, type: 'start' | 'end' | 'cp', cpIdx: 0 }
+  let selectedShortcutPoint = null; // { type: 'start' | 'end' | 'cp' | 'curve', cpIdx: 0 }
+  let hoverShortcutPoint = null; // { sIdx, type: 'start' | 'end' | 'cp' | 'curve', cpIdx: 0 }
   let dragging = false;
   let dragIdx = -1;
-  let dragType = null; // 'point' | 'obs' | 'ramp' | 'pu' | 'terrain' | 'tunnel-rotate' | 'shortcut-cp' | 'shortcut-start' | 'shortcut-end'
+  let dragType = null; // 'point' | 'obs' | 'ramp' | 'pu' | 'terrain' | 'tunnel-rotate' | 'shortcut-cp' | 'shortcut-start' | 'shortcut-end' | 'shortcut-curve' | 'shortcut-elevate-drag' | 'point-elevate-drag'
+  let dragShortcutStartPos = null;
+  let dragShortcutInitialCPs = null;
+  let dragElevationStartY = 0;
+  let dragElevationStartMouseY = 0;
   let shortcutDraft = null; // { startSampleIdx, controlPoints: [] }
   let barrierDraft = null; // { x, z } (punto inicial)
 
@@ -275,7 +279,10 @@
       editorObstacles = (data.obstacles || []).map(o => ({ ...o }));
       editorRamps     = (data.ramps     || []).map(r => ({ ...r }));
       editorPowerups  = (data.powerups  || []).map(p => ({ ...p }));
-      editorShortcuts = (data.shortcuts || []).map(s => ({ ...s }));
+      editorShortcuts = (data.shortcuts || []).map(s => ({
+        ...s,
+        controlPoints: s.controlPoints ? s.controlPoints.map(cp => [cp[0], cp[1] || 0, cp[2]]) : []
+      }));
       editorTerrainNodes = (data.terrainNodes || []).map(t => ({ ...t }));
       editorBarriers = (data.barriers || []).map(b => ({ start: { ...b.start }, end: { ...b.end } }));
     } else {
@@ -425,9 +432,65 @@
     // Herramientas de Atajos y Terreno
     document.getElementById('tool-elevate').addEventListener('click', () => setTool('elevate'));
     document.getElementById('tool-shortcut-add').addEventListener('click', () => setTool('shortcut-add'));
+    const btnScAddPoint = document.getElementById('tool-shortcut-add-point');
+    if (btnScAddPoint) btnScAddPoint.addEventListener('click', () => setTool('shortcut-add-point'));
+    const btnScElevate = document.getElementById('tool-shortcut-elevate');
+    if (btnScElevate) btnScElevate.addEventListener('click', () => setTool('shortcut-elevate'));
     document.getElementById('tool-shortcut-delete').addEventListener('click', () => setTool('shortcut-delete'));
     document.getElementById('tool-terrain-add').addEventListener('click', () => setTool('terrain-add'));
     document.getElementById('tool-terrain-delete').addEventListener('click', () => setTool('terrain-delete'));
+
+    // Controles de atajo seleccionado en sidebar
+    const scHeightInput = document.getElementById('sc-height');
+    if (scHeightInput) {
+      scHeightInput.addEventListener('input', e => {
+        const val = parseInt(e.target.value);
+        const scHVal = document.getElementById('sc-height-val');
+        if (scHVal) scHVal.textContent = val;
+        if (selectedShortcutIdx >= 0 && editorShortcuts[selectedShortcutIdx]) {
+          const sc = editorShortcuts[selectedShortcutIdx];
+          if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+            sc.controlPoints[selectedShortcutPoint.cpIdx][1] = val;
+          } else if (sc.controlPoints) {
+            sc.controlPoints.forEach(cp => { cp[1] = val; });
+          }
+          const piY = document.getElementById('pi-y');
+          if (piY) piY.value = val;
+          const nh = document.getElementById('node-height');
+          if (nh) nh.value = val;
+          const nhv = document.getElementById('node-height-val');
+          if (nhv) nhv.textContent = val;
+          editor3DNeedsSync = true; render();
+        }
+      });
+      scHeightInput.addEventListener('change', () => { if (selectedShortcutIdx >= 0) pushHistory(); });
+    }
+
+    const scWidthInput = document.getElementById('sc-width');
+    if (scWidthInput) {
+      scWidthInput.addEventListener('input', e => {
+        const val = parseInt(e.target.value);
+        const scWVal = document.getElementById('sc-width-val');
+        if (scWVal) scWVal.textContent = val;
+        if (selectedShortcutIdx >= 0 && editorShortcuts[selectedShortcutIdx]) {
+          editorShortcuts[selectedShortcutIdx].halfWidth = val / 2;
+          editor3DNeedsSync = true; render();
+        }
+      });
+      scWidthInput.addEventListener('change', () => { if (selectedShortcutIdx >= 0) pushHistory(); });
+    }
+
+    const btnScDelPt = document.getElementById('btn-sc-del-pt');
+    if (btnScDelPt) btnScDelPt.addEventListener('click', () => deleteSelectedPoint());
+
+    const btnScAddCp = document.getElementById('btn-sc-add-cp');
+    if (btnScAddCp) btnScAddCp.addEventListener('click', () => addShortcutControlPoint());
+
+    const piBtnDel = document.getElementById('pi-btn-del');
+    if (piBtnDel) piBtnDel.addEventListener('click', () => deleteSelectedPoint());
+
+    const piBtnAdd = document.getElementById('pi-btn-add');
+    if (piBtnAdd) piBtnAdd.addEventListener('click', () => addShortcutControlPoint());
 
     // Herramientas de Barreras
     document.getElementById('tool-barrier-add').addEventListener('click', () => setTool('barrier-add'));
@@ -648,8 +711,24 @@
     document.getElementById('node-height').addEventListener('input', e => {
       const val = parseInt(e.target.value);
       document.getElementById('node-height-val').textContent = val;
-      if (tool === 'elevate' && selectedIdx >= 0) {
+      if (selectedShortcutIdx >= 0 && editorShortcuts[selectedShortcutIdx]) {
+        const sc = editorShortcuts[selectedShortcutIdx];
+        if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+          sc.controlPoints[selectedShortcutPoint.cpIdx][1] = val;
+        } else if (sc.controlPoints) {
+          sc.controlPoints.forEach(cp => { cp[1] = val; });
+        }
+        const piY = document.getElementById('pi-y');
+        if (piY) piY.value = val;
+        const scH = document.getElementById('sc-height');
+        if (scH) scH.value = val;
+        const scHV = document.getElementById('sc-height-val');
+        if (scHV) scHV.textContent = val;
+        editor3DNeedsSync = true; render();
+      } else if (tool === 'elevate' && selectedIdx >= 0) {
         controlPoints[selectedIdx].y = val;
+        const piY = document.getElementById('pi-y');
+        if (piY) piY.value = val;
         render();
       } else if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
         editorTerrainNodes[selectedTerrainIdx].height = val;
@@ -657,7 +736,7 @@
       }
     });
     document.getElementById('node-height').addEventListener('change', () => {
-      if (tool === 'elevate' && selectedIdx >= 0) pushHistory();
+      if ((tool === 'elevate' || tool === 'shortcut-elevate') && (selectedIdx >= 0 || selectedShortcutIdx >= 0)) pushHistory();
       else if (selectedTerrainIdx >= 0) pushHistory();
     });
 
@@ -831,18 +910,62 @@
     }
 
     // Point info inputs
-    document.getElementById('pi-x').addEventListener('input', e => {
-      if (selectedIdx < 0) return;
-      controlPoints[selectedIdx].x = parseFloat(e.target.value) || 0;
-      render();
-    });
-    document.getElementById('pi-x').addEventListener('change', e => pushHistory());
-    document.getElementById('pi-z').addEventListener('input', e => {
-      if (selectedIdx < 0) return;
-      controlPoints[selectedIdx].z = parseFloat(e.target.value) || 0;
-      render();
-    });
-    document.getElementById('pi-z').addEventListener('change', e => pushHistory());
+    const piXInput = document.getElementById('pi-x');
+    if (piXInput) {
+      piXInput.addEventListener('input', e => {
+        const val = parseFloat(e.target.value) || 0;
+        if (selectedShortcutIdx >= 0 && selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && editorShortcuts[selectedShortcutIdx]) {
+          editorShortcuts[selectedShortcutIdx].controlPoints[selectedShortcutPoint.cpIdx][0] = val;
+          editor3DNeedsSync = true; render();
+        } else if (selectedIdx >= 0 && controlPoints[selectedIdx]) {
+          controlPoints[selectedIdx].x = val;
+          render();
+        }
+      });
+      piXInput.addEventListener('change', () => pushHistory());
+    }
+
+    const piYInput = document.getElementById('pi-y');
+    if (piYInput) {
+      piYInput.addEventListener('input', e => {
+        const val = parseFloat(e.target.value) || 0;
+        if (selectedShortcutIdx >= 0 && selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && editorShortcuts[selectedShortcutIdx]) {
+          editorShortcuts[selectedShortcutIdx].controlPoints[selectedShortcutPoint.cpIdx][1] = val;
+          const scH = document.getElementById('sc-height');
+          if (scH) scH.value = val;
+          const scHV = document.getElementById('sc-height-val');
+          if (scHV) scHV.textContent = val;
+          const nh = document.getElementById('node-height');
+          if (nh) nh.value = val;
+          const nhV = document.getElementById('node-height-val');
+          if (nhV) nhV.textContent = val;
+          editor3DNeedsSync = true; render();
+        } else if (selectedIdx >= 0 && controlPoints[selectedIdx]) {
+          controlPoints[selectedIdx].y = val;
+          const nh = document.getElementById('node-height');
+          if (nh) nh.value = val;
+          const nhV = document.getElementById('node-height-val');
+          if (nhV) nhV.textContent = val;
+          render();
+        }
+      });
+      piYInput.addEventListener('change', () => pushHistory());
+    }
+
+    const piZInput = document.getElementById('pi-z');
+    if (piZInput) {
+      piZInput.addEventListener('input', e => {
+        const val = parseFloat(e.target.value) || 0;
+        if (selectedShortcutIdx >= 0 && selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && editorShortcuts[selectedShortcutIdx]) {
+          editorShortcuts[selectedShortcutIdx].controlPoints[selectedShortcutPoint.cpIdx][2] = val;
+          editor3DNeedsSync = true; render();
+        } else if (selectedIdx >= 0 && controlPoints[selectedIdx]) {
+          controlPoints[selectedIdx].z = val;
+          render();
+        }
+      });
+      piZInput.addEventListener('change', () => pushHistory());
+    }
 
 
     // Canvas events
@@ -889,24 +1012,49 @@
             editor3DNeedsSync = true; sync3DIfNeeded();
             render(); pushHistory(); return;
           }
-          if (selectedShortcutIdx >= 0 && editorShortcuts[selectedShortcutIdx]) {
-            const sc = editorShortcuts[selectedShortcutIdx];
-            if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && sc.controlPoints.length > 1) {
-              sc.controlPoints.splice(selectedShortcutPoint.cpIdx, 1);
-              selectedShortcutPoint = null;
-              setStatus('info', 'Punto de control del atajo eliminado.');
-            } else {
-              editorShortcuts.splice(selectedShortcutIdx, 1);
-              selectedShortcutIdx = -1;
-              selectedShortcutPoint = null;
-              setStatus('info', 'Atajo eliminado.');
-            }
-            updateShortcutCount();
-            editor3DNeedsSync = true; sync3DIfNeeded();
-            render(); pushHistory(); return;
+          if (selectedShortcutIdx >= 0) {
+            deleteSelectedPoint();
+            return;
           }
-          if (selectedIdx >= 0)        { removePoint(selectedIdx); pushHistory(); }
+          if (selectedIdx >= 0) { removePoint(selectedIdx); pushHistory(); }
         }
+
+        // Nudge de punto y elevación con teclas de dirección
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', '[', ']'].includes(e.key)) {
+          e.preventDefault();
+          const step = e.shiftKey ? 5 : 1;
+          let moved = false;
+          if (selectedShortcutIdx >= 0 && selectedShortcutPoint && selectedShortcutPoint.type === 'cp') {
+            const sc = editorShortcuts[selectedShortcutIdx];
+            if (sc && sc.controlPoints && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+              const cp = sc.controlPoints[selectedShortcutPoint.cpIdx];
+              if (e.key === 'ArrowLeft')  { cp[0] -= step; moved = true; }
+              if (e.key === 'ArrowRight') { cp[0] += step; moved = true; }
+              if (e.key === 'ArrowUp')    { cp[2] -= step; moved = true; }
+              if (e.key === 'ArrowDown')  { cp[2] += step; moved = true; }
+              if (e.key === 'PageUp' || e.key === ']')   { cp[1] = Math.min(120, (cp[1] || 0) + step); moved = true; }
+              if (e.key === 'PageDown' || e.key === '[') { cp[1] = Math.max(-40, (cp[1] || 0) - step); moved = true; }
+              if (moved) {
+                showShortcutPointInfo(selectedShortcutIdx, selectedShortcutPoint);
+                editor3DNeedsSync = true; sync3DIfNeeded(); render(); pushHistory();
+              }
+            }
+          } else if (selectedIdx >= 0 && controlPoints[selectedIdx]) {
+            const p = controlPoints[selectedIdx];
+            if (e.key === 'ArrowLeft')  { p.x -= step; moved = true; }
+            if (e.key === 'ArrowRight') { p.x += step; moved = true; }
+            if (e.key === 'ArrowUp')    { p.z -= step; moved = true; }
+            if (e.key === 'ArrowDown')  { p.z += step; moved = true; }
+            if (e.key === 'PageUp' || e.key === ']')   { p.y = Math.min(120, (p.y || 0) + step); moved = true; }
+            if (e.key === 'PageDown' || e.key === '[') { p.y = Math.max(-40, (p.y || 0) - step); moved = true; }
+            if (moved) {
+              showPointInfo(selectedIdx);
+              syncHeightSliders(p.y || 0);
+              render(); pushHistory();
+            }
+          }
+        }
+
         if (e.key === 'Escape') {
           selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
           selectedShortcutIdx = -1; selectedShortcutPoint = null;
@@ -924,11 +1072,99 @@
     window.addEventListener('resize', () => { resizeCanvas(); render(); });
   }
 
+  function syncHeightSliders(val) {
+    const nh = document.getElementById('node-height');
+    const nhv = document.getElementById('node-height-val');
+    const scH = document.getElementById('sc-height');
+    const scHv = document.getElementById('sc-height-val');
+    const piY = document.getElementById('pi-y');
+    const roundVal = Math.round(val || 0);
+    if (nh) nh.value = roundVal;
+    if (nhv) nhv.textContent = roundVal;
+    if (scH) scH.value = roundVal;
+    if (scHv) scHv.textContent = roundVal;
+    if (piY) piY.value = roundVal;
+  }
+
+  function deleteSelectedPoint() {
+    if (selectedShortcutIdx >= 0 && editorShortcuts[selectedShortcutIdx]) {
+      const sc = editorShortcuts[selectedShortcutIdx];
+      if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp') {
+        if (sc.controlPoints.length > 1) {
+          sc.controlPoints.splice(selectedShortcutPoint.cpIdx, 1);
+          selectedShortcutPoint = { type: 'cp', cpIdx: Math.max(0, selectedShortcutPoint.cpIdx - 1) };
+          showShortcutPointInfo(selectedShortcutIdx, selectedShortcutPoint);
+          setStatus('info', 'Punto CP eliminado del atajo.');
+        } else {
+          editorShortcuts.splice(selectedShortcutIdx, 1);
+          selectedShortcutIdx = -1; selectedShortcutPoint = null;
+          hidePointInfo();
+          setStatus('info', 'Atajo eliminado.');
+        }
+      } else {
+        editorShortcuts.splice(selectedShortcutIdx, 1);
+        selectedShortcutIdx = -1; selectedShortcutPoint = null;
+        hidePointInfo();
+        setStatus('info', 'Atajo eliminado.');
+      }
+      updateShortcutCount();
+      editor3DNeedsSync = true; sync3DIfNeeded();
+      render(); pushHistory();
+    } else if (selectedIdx >= 0) {
+      removePoint(selectedIdx);
+      pushHistory();
+    }
+  }
+
+  function addShortcutControlPoint() {
+    if (selectedShortcutIdx < 0 || !editorShortcuts[selectedShortcutIdx]) {
+      if (editorShortcuts.length > 0) selectedShortcutIdx = editorShortcuts.length - 1;
+      else { setStatus('err', 'Primero creá un atajo para añadirle puntos.'); return; }
+    }
+    const sc = editorShortcuts[selectedShortcutIdx];
+    if (!sc.controlPoints) sc.controlPoints = [];
+    let insertIdx = sc.controlPoints.length;
+    let newPt = [0, 0, 0];
+    if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+      insertIdx = selectedShortcutPoint.cpIdx + 1;
+      const cur = sc.controlPoints[selectedShortcutPoint.cpIdx];
+      const next = sc.controlPoints[insertIdx];
+      if (next) {
+        newPt = [
+          Math.round((cur[0] + next[0]) / 2),
+          Math.round(((cur[1] || 0) + (next[1] || 0)) / 2),
+          Math.round((cur[2] + next[2]) / 2)
+        ];
+      } else {
+        newPt = [cur[0] + 20, cur[1] || 0, cur[2] + 20];
+      }
+    } else if (sc.controlPoints.length > 0) {
+      const last = sc.controlPoints[sc.controlPoints.length - 1];
+      newPt = [last[0] + 20, last[1] || 0, last[2] + 20];
+    } else {
+      const geom = getShortcutGeometry(sc);
+      if (geom) {
+        newPt = [
+          Math.round((geom.anchorStart.x + geom.anchorEnd.x) / 2),
+          0,
+          Math.round((geom.anchorStart.z + geom.anchorEnd.z) / 2)
+        ];
+      }
+    }
+    sc.controlPoints.splice(insertIdx, 0, newPt);
+    selectedShortcutPoint = { type: 'cp', cpIdx: insertIdx };
+    showShortcutPointInfo(selectedShortcutIdx, selectedShortcutPoint);
+    updateShortcutCount();
+    editor3DNeedsSync = true; sync3DIfNeeded();
+    render(); pushHistory();
+    setStatus('ok', `Punto CP#${insertIdx + 1} añadido al Atajo #${selectedShortcutIdx + 1}.`);
+  }
+
   function setTool(t) {
     tool = t;
-    if (['add','obs-add','ramp-add','pu-add','terrain-add','shortcut-add','barrier-add'].includes(t)) canvas.style.cursor = 'crosshair';
+    if (['add','obs-add','ramp-add','pu-add','terrain-add','shortcut-add','shortcut-add-point','barrier-add'].includes(t)) canvas.style.cursor = 'crosshair';
     else if (['delete','obs-delete','ramp-delete','pu-delete','terrain-delete','shortcut-delete','barrier-delete'].includes(t)) canvas.style.cursor = 'not-allowed';
-    else if (t === 'elevate') canvas.style.cursor = 'ns-resize';
+    else if (t === 'elevate' || t === 'shortcut-elevate') canvas.style.cursor = 'ns-resize';
     else canvas.style.cursor = 'grab';
     document.querySelectorAll('.sw-tool-btn').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('tool-' + t);
@@ -945,18 +1181,24 @@
       'terrain-add': 'Click para añadir montaña/hueco. Usá los sliders para configurar.',
       'terrain-delete': 'Click en el terreno para eliminarlo',
       'shortcut-add': 'Click 1: Inicio en pista. Clicks: Puntos intermedios. Doble Click en pista: Fin.',
+      'shortcut-add-point': 'Click en el canvas o sobre un atajo para añadir un nuevo punto CP',
+      'shortcut-elevate': 'Seleccioná un punto de atajo y usá el slider o arrastrá verticalmente para elevarlo',
       'shortcut-delete': 'Click en un atajo o en sus puntos para eliminarlo',
       'barrier-add': 'Click 1: Inicio de barrera. Click 2: Fin de barrera.',
       'barrier-delete': 'Click en una barrera para eliminarla'
     };
     setStatus('info', 'Herramienta activa: ' + (labels[t] || t));
     
-    // Si cambiamos a elevate, intentamos sincronizar el slider
-    if (t === 'elevate' && selectedIdx >= 0) {
-      const p = controlPoints[selectedIdx];
-      const hEl = document.getElementById('node-height');
-      hEl.value = p.y || 0;
-      document.getElementById('node-height-val').textContent = p.y || 0;
+    // Si cambiamos a elevate o shortcut-elevate, intentamos sincronizar sliders
+    if (t === 'elevate' || t === 'shortcut-elevate') {
+      if (selectedShortcutIdx >= 0 && selectedShortcutPoint && selectedShortcutPoint.type === 'cp') {
+        const sc = editorShortcuts[selectedShortcutIdx];
+        if (sc && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+          syncHeightSliders(sc.controlPoints[selectedShortcutPoint.cpIdx][1] || 0);
+        }
+      } else if (selectedIdx >= 0 && controlPoints[selectedIdx]) {
+        syncHeightSliders(controlPoints[selectedIdx].y || 0);
+      }
     }
   }
 
@@ -983,12 +1225,108 @@
   }
 
   function showPointInfo(idx) {
+    if (idx < 0 || !controlPoints[idx]) return;
     const p = controlPoints[idx];
-    document.getElementById('pi-x').value = Math.round(p.x);
-    document.getElementById('pi-z').value = Math.round(p.z);
+    const piTitle = document.getElementById('pi-title');
+    const piSub = document.getElementById('pi-subtitle');
+    const piX = document.getElementById('pi-x');
+    const piY = document.getElementById('pi-y');
+    const piZ = document.getElementById('pi-z');
+    const piBtnDel = document.getElementById('pi-btn-del');
+    const piBtnAdd = document.getElementById('pi-btn-add');
+    const scCtrls = document.getElementById('sc-selected-controls');
+
+    if (piTitle) piTitle.innerHTML = `<i class="fa fa-map-pin"></i> &nbsp;PISTA: PUNTO #${idx + 1}`;
+    if (piSub) piSub.textContent = `Punto de control de pista principal`;
+    if (piX) piX.value = Math.round(p.x);
+    if (piY) piY.value = Math.round(p.y || 0);
+    if (piZ) piZ.value = Math.round(p.z);
+    if (piBtnDel) { piBtnDel.style.display = 'block'; piBtnDel.innerHTML = `<i class="fa fa-trash"></i> Eliminar`; }
+    if (piBtnAdd) piBtnAdd.style.display = 'none';
+    if (scCtrls) scCtrls.style.display = 'none';
+
     document.getElementById('point-info').classList.add('visible');
   }
-  function hidePointInfo() { document.getElementById('point-info').classList.remove('visible'); }
+
+  function showShortcutPointInfo(sIdx, pt) {
+    if (sIdx < 0 || !editorShortcuts[sIdx]) { hidePointInfo(); return; }
+    const sc = editorShortcuts[sIdx];
+    const geom = getShortcutGeometry(sc);
+    const piTitle = document.getElementById('pi-title');
+    const piSub = document.getElementById('pi-subtitle');
+    const piX = document.getElementById('pi-x');
+    const piY = document.getElementById('pi-y');
+    const piZ = document.getElementById('pi-z');
+    const piBtnDel = document.getElementById('pi-btn-del');
+    const piBtnAdd = document.getElementById('pi-btn-add');
+    const scCtrls = document.getElementById('sc-selected-controls');
+    const scLabel = document.getElementById('sc-selected-label');
+    const scH = document.getElementById('sc-height');
+    const scHv = document.getElementById('sc-height-val');
+    const scW = document.getElementById('sc-width');
+    const scWv = document.getElementById('sc-width-val');
+
+    if (scCtrls) scCtrls.style.display = 'block';
+    const currentW = Math.round((sc.halfWidth || trackWidth * 0.7) * 2);
+    if (scW) scW.value = currentW;
+    if (scWv) scWv.textContent = currentW;
+
+    if (!pt || pt.type === 'curve') {
+      if (piTitle) piTitle.innerHTML = `<i class="fa fa-code-branch"></i> &nbsp;ATAJO #${sIdx + 1}`;
+      if (piSub) piSub.textContent = `Pista Secundaria (${sc.controlPoints ? sc.controlPoints.length : 0} puntos CP)`;
+      if (geom) {
+        piX.value = Math.round((geom.anchorStart.x + geom.anchorEnd.x) / 2);
+        piY.value = sc.controlPoints && sc.controlPoints.length > 0 ? Math.round(sc.controlPoints[0][1] || 0) : 0;
+        piZ.value = Math.round((geom.anchorStart.z + geom.anchorEnd.z) / 2);
+      }
+      if (piBtnDel) { piBtnDel.style.display = 'block'; piBtnDel.innerHTML = `<i class="fa fa-trash"></i> Eliminar Atajo`; }
+      if (piBtnAdd) { piBtnAdd.style.display = 'block'; piBtnAdd.innerHTML = `<i class="fa fa-plus"></i> Añadir CP`; }
+      if (scLabel) scLabel.textContent = `ATAJO #${sIdx + 1} (COMPLETO)`;
+    } else if (pt.type === 'cp') {
+      const cp = sc.controlPoints[pt.cpIdx];
+      if (!cp) return;
+      if (piTitle) piTitle.innerHTML = `<i class="fa fa-code-branch"></i> &nbsp;ATAJO #${sIdx + 1}`;
+      if (piSub) piSub.textContent = `Punto de Control CP#${pt.cpIdx + 1} de ${sc.controlPoints.length}`;
+      if (piX) piX.value = Math.round(cp[0]);
+      if (piY) piY.value = Math.round(cp[1] || 0);
+      if (piZ) piZ.value = Math.round(cp[2]);
+      if (piBtnDel) { piBtnDel.style.display = 'block'; piBtnDel.innerHTML = `<i class="fa fa-times"></i> Borrar CP`; }
+      if (piBtnAdd) { piBtnAdd.style.display = 'block'; piBtnAdd.innerHTML = `<i class="fa fa-plus"></i> Añadir CP`; }
+      if (scLabel) scLabel.textContent = `ATAJO #${sIdx + 1} — CP#${pt.cpIdx + 1}`;
+      if (scH) { scH.value = Math.round(cp[1] || 0); if (scHv) scHv.textContent = Math.round(cp[1] || 0); }
+    } else if (pt.type === 'start') {
+      if (piTitle) piTitle.innerHTML = `<i class="fa fa-anchor"></i> &nbsp;ATAJO #${sIdx + 1}`;
+      if (piSub) piSub.textContent = `Ancla de Inicio ⚓ (Muestra #${sc.startSampleIdx})`;
+      if (geom) {
+        piX.value = Math.round(geom.anchorStart.x);
+        piY.value = Math.round(geom.anchorStart.y || 0);
+        piZ.value = Math.round(geom.anchorStart.z);
+      }
+      if (piBtnDel) { piBtnDel.style.display = 'block'; piBtnDel.innerHTML = `<i class="fa fa-trash"></i> Eliminar Atajo`; }
+      if (piBtnAdd) { piBtnAdd.style.display = 'block'; piBtnAdd.innerHTML = `<i class="fa fa-plus"></i> Añadir CP`; }
+      if (scLabel) scLabel.textContent = `ATAJO #${sIdx + 1} — ANCLA INICIO`;
+    } else if (pt.type === 'end') {
+      if (piTitle) piTitle.innerHTML = `<i class="fa fa-bullseye"></i> &nbsp;ATAJO #${sIdx + 1}`;
+      if (piSub) piSub.textContent = `Ancla de Fin 🎯 (Muestra #${sc.endSampleIdx})`;
+      if (geom) {
+        piX.value = Math.round(geom.anchorEnd.x);
+        piY.value = Math.round(geom.anchorEnd.y || 0);
+        piZ.value = Math.round(geom.anchorEnd.z);
+      }
+      if (piBtnDel) { piBtnDel.style.display = 'block'; piBtnDel.innerHTML = `<i class="fa fa-trash"></i> Eliminar Atajo`; }
+      if (piBtnAdd) { piBtnAdd.style.display = 'block'; piBtnAdd.innerHTML = `<i class="fa fa-plus"></i> Añadir CP`; }
+      if (scLabel) scLabel.textContent = `ATAJO #${sIdx + 1} — ANCLA FIN`;
+    }
+
+    document.getElementById('point-info').classList.add('visible');
+  }
+
+  function hidePointInfo() {
+    const pi = document.getElementById('point-info');
+    if (pi) pi.classList.remove('visible');
+    const scCtrls = document.getElementById('sc-selected-controls');
+    if (scCtrls) scCtrls.style.display = 'none';
+  }
 
   function setStatus(type, msg) {
     const bar = document.getElementById('status-bar');
@@ -1117,6 +1455,21 @@
     return -1;
   }
 
+  function getClosestTrackSample(mx, my) {
+    if (controlPoints.length < 2) return null;
+    const spline = buildSpline(controlPoints, true, 20);
+    let best = null, bestDist = Infinity;
+    for (let i = 0; i < spline.length; i++) {
+      const sc = worldToCanvas(spline[i].x, spline[i].z);
+      const d2 = (mx - sc.x) ** 2 + (my - sc.y) ** 2;
+      if (d2 < bestDist) { bestDist = d2; best = { splineIdx: i, total: spline.length, p: spline[i] }; }
+    }
+    if (!best) return null;
+    const TRACK_SAMPLES = 600;
+    const sampleIdx = Math.round((best.splineIdx / best.total) * TRACK_SAMPLES) % TRACK_SAMPLES;
+    return { sampleIdx, p: best.p };
+  }
+
   // ────────────────────────────────────────────────────
   //  Geometría y detección de atajos (anclas + CPs)
   // ────────────────────────────────────────────────────
@@ -1127,7 +1480,7 @@
     const endP = getTrackWorldPoint(sc.endSampleIdx);
     if (!startP || !endP) return null;
 
-    const hw = trackWidth;
+    const hw = sc.halfWidth || (trackWidth * 0.7);
     const firstCP = sc.controlPoints[0];
     const lastCP = sc.controlPoints[sc.controlPoints.length - 1];
 
@@ -1154,10 +1507,22 @@
     const toEndX = endP.x - lastCP[0], toEndZ = endP.z - lastCP[2];
     const sideEnd = (toEndX * normEndX + toEndZ * normEndZ) >= 0 ? 1 : -1;
 
-    const anchorStart = { x: startP.x + normStartX * hw * sideStart, z: startP.z + normStartZ * hw * sideStart };
-    const anchorEnd   = { x: endP.x   + normEndX   * hw * sideEnd,   z: endP.z   + normEndZ   * hw * sideEnd   };
+    const anchorStart = {
+      x: startP.x + normStartX * hw * sideStart,
+      y: startP.y || 0,
+      z: startP.z + normStartZ * hw * sideStart
+    };
+    const anchorEnd = {
+      x: endP.x + normEndX * hw * sideEnd,
+      y: endP.y || 0,
+      z: endP.z + normEndZ * hw * sideEnd
+    };
 
-    const pts = [anchorStart, ...sc.controlPoints.map(p => ({ x: p[0], z: p[2] })), anchorEnd];
+    const pts = [
+      anchorStart,
+      ...sc.controlPoints.map(p => ({ x: p[0], y: p[1] || 0, z: p[2] })),
+      anchorEnd
+    ];
     const scSpline = buildSpline(pts, false, 15);
 
     return { startP, endP, anchorStart, anchorEnd, pts, scSpline };
@@ -1179,7 +1544,7 @@
         const isPtSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && selectedShortcutPoint.cpIdx === cpIdx;
         const hitR = isPtSelected ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10) : Math.max(14, 10 / zoom);
         if (dx * dx + dy * dy <= hitR * hitR) {
-          return { sIdx, type: 'cp', cpIdx, x: pt[0], z: pt[2] };
+          return { sIdx, type: 'cp', cpIdx, x: pt[0], y: pt[1] || 0, z: pt[2] };
         }
       }
 
@@ -1189,7 +1554,7 @@
       const isStartSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'start';
       const hitRStart = isStartSelected ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10) : Math.max(16, 11 / zoom);
       if (dxStart * dxStart + dyStart * dyStart <= hitRStart * hitRStart) {
-        return { sIdx, type: 'start', cpIdx: -1, x: geom.anchorStart.x, z: geom.anchorStart.z };
+        return { sIdx, type: 'start', cpIdx: -1, x: geom.anchorStart.x, y: geom.anchorStart.y || 0, z: geom.anchorStart.z };
       }
 
       // 3. Ancla de fin (end)
@@ -1198,7 +1563,7 @@
       const isEndSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'end';
       const hitREnd = isEndSelected ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10) : Math.max(16, 11 / zoom);
       if (dxEnd * dxEnd + dyEnd * dyEnd <= hitREnd * hitREnd) {
-        return { sIdx, type: 'end', cpIdx: -1, x: geom.anchorEnd.x, z: geom.anchorEnd.z };
+        return { sIdx, type: 'end', cpIdx: -1, x: geom.anchorEnd.x, y: geom.anchorEnd.y || 0, z: geom.anchorEnd.z };
       }
 
       // 4. Curva del atajo
@@ -1207,7 +1572,7 @@
           const scP = worldToCanvas(sp.x, sp.z);
           const d2 = (mx - scP.x)**2 + (my - scP.y)**2;
           if (d2 <= (Math.max(12, 16 / zoom))**2) {
-            return { sIdx, type: 'curve', cpIdx: -1, x: sp.x, z: sp.z };
+            return { sIdx, type: 'curve', cpIdx: -1, x: sp.x, y: sp.y || 0, z: sp.z };
           }
         }
       }
@@ -1337,7 +1702,12 @@
              halfWidth: trackWidth * 0.7,
              controlPoints: shortcutDraft.controlPoints
            });
+           selectedShortcutIdx = editorShortcuts.length - 1;
+           selectedShortcutPoint = { type: 'cp', cpIdx: 0 };
+           showShortcutPointInfo(selectedShortcutIdx, selectedShortcutPoint);
+           updateShortcutCount();
            shortcutDraft = null;
+           editor3DNeedsSync = true; sync3DIfNeeded();
            render(); pushHistory();
            setStatus('ok', 'Atajo creado.');
         } else {
@@ -1347,6 +1717,75 @@
         }
       }
       return;
+    }
+
+    if (tool === 'shortcut-add-point') {
+      const w = canvasToWorld(mx, my);
+      let targetScIdx = selectedShortcutIdx;
+      if (targetScIdx < 0 || !editorShortcuts[targetScIdx]) {
+        const hit = shortcutHitTest(mx, my);
+        if (hit) targetScIdx = hit.sIdx;
+        else if (editorShortcuts.length > 0) targetScIdx = editorShortcuts.length - 1;
+      }
+      if (targetScIdx >= 0 && editorShortcuts[targetScIdx]) {
+        const sc = editorShortcuts[targetScIdx];
+        if (!sc.controlPoints) sc.controlPoints = [];
+        let insertIdx = sc.controlPoints.length;
+        let newY = 0;
+        if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+          insertIdx = selectedShortcutPoint.cpIdx + 1;
+          newY = sc.controlPoints[selectedShortcutPoint.cpIdx][1] || 0;
+        } else if (sc.controlPoints.length > 0) {
+          newY = sc.controlPoints[sc.controlPoints.length - 1][1] || 0;
+        }
+        const newPt = [Math.round(w.x), newY, Math.round(w.z)];
+        sc.controlPoints.splice(insertIdx, 0, newPt);
+        selectedShortcutIdx = targetScIdx;
+        selectedShortcutPoint = { type: 'cp', cpIdx: insertIdx };
+        showShortcutPointInfo(targetScIdx, selectedShortcutPoint);
+        updateShortcutCount();
+        editor3DNeedsSync = true; sync3DIfNeeded();
+        render(); pushHistory();
+        setStatus('ok', `Punto CP#${insertIdx + 1} añadido al Atajo #${targetScIdx + 1}.`);
+      } else {
+        setStatus('err', 'Primero creá un atajo para añadirle puntos.');
+      }
+      return;
+    }
+
+    if (tool === 'shortcut-elevate' || tool === 'elevate') {
+      const hitSc = shortcutHitTest(mx, my);
+      if (hitSc && hitSc.type === 'cp') {
+        selectedShortcutIdx = hitSc.sIdx;
+        selectedShortcutPoint = { type: 'cp', cpIdx: hitSc.cpIdx };
+        selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
+        dragging = true; dragIdx = hitSc.sIdx;
+        dragType = 'shortcut-elevate-drag';
+        dragElevationStartY = editorShortcuts[hitSc.sIdx].controlPoints[hitSc.cpIdx][1] || 0;
+        dragElevationStartMouseY = my;
+        canvas.style.cursor = 'ns-resize';
+        showShortcutPointInfo(hitSc.sIdx, selectedShortcutPoint);
+        syncHeightSliders(dragElevationStartY);
+        setStatus('ok', `Elevando CP#${hitSc.cpIdx + 1} (Atajo #${hitSc.sIdx + 1}). Arrastrá verticalmente o usá el slider.`);
+        render();
+        return;
+      }
+      const idx = hitTest(mx, my);
+      if (idx >= 0) {
+        selectedIdx = idx;
+        selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
+        selectedShortcutIdx = -1; selectedShortcutPoint = null;
+        dragging = true; dragIdx = idx;
+        dragType = 'point-elevate-drag';
+        dragElevationStartY = controlPoints[idx].y || 0;
+        dragElevationStartMouseY = my;
+        canvas.style.cursor = 'ns-resize';
+        showPointInfo(idx);
+        syncHeightSliders(dragElevationStartY);
+        setStatus('ok', `Elevando Punto #${idx + 1} de pista. Arrastrá verticalmente o usá el slider.`);
+        render();
+        return;
+      }
     }
 
     if (tool === 'shortcut-delete') {
@@ -1485,7 +1924,17 @@
       else if (hitSc.type === 'cp') dragType = 'shortcut-cp';
       else dragType = 'shortcut-curve';
       canvas.style.cursor = 'grabbing';
-      hidePointInfo();
+      if (hitSc.type === 'cp') {
+        const sc = editorShortcuts[hitSc.sIdx];
+        if (sc && sc.controlPoints[hitSc.cpIdx]) {
+          syncHeightSliders(sc.controlPoints[hitSc.cpIdx][1] || 0);
+        }
+      } else if (hitSc.type === 'curve') {
+        dragShortcutStartPos = canvasToWorld(mx, my);
+        const sc = editorShortcuts[hitSc.sIdx];
+        dragShortcutInitialCPs = sc ? (sc.controlPoints || []).map(p => [...p]) : null;
+      }
+      showShortcutPointInfo(hitSc.sIdx, selectedShortcutPoint);
       const ptDesc = hitSc.type === 'start' ? 'Ancla de inicio ⚓' : hitSc.type === 'end' ? 'Ancla de fin 🎯' : hitSc.type === 'cp' ? `Punto de control CP#${hitSc.cpIdx + 1}` : 'Atajo';
       setStatus('ok', `${ptDesc} del Atajo #${hitSc.sIdx + 1} seleccionado. Arrastralo para reposicionar.`);
       render();
@@ -1589,20 +2038,55 @@
           const w = canvasToWorld(mx, my);
           sc.controlPoints[selectedShortcutPoint.cpIdx][0] = Math.round(w.x);
           sc.controlPoints[selectedShortcutPoint.cpIdx][2] = Math.round(w.z);
+          showShortcutPointInfo(dragIdx, selectedShortcutPoint);
           editor3DNeedsSync = true;
         }
       } else if (dragType === 'shortcut-start') {
         const sc = editorShortcuts[dragIdx];
-        const hitTrack = splineHitTest(mx, my);
+        const hitTrack = getClosestTrackSample(mx, my);
         if (sc && hitTrack) {
           sc.startSampleIdx = hitTrack.sampleIdx;
+          showShortcutPointInfo(dragIdx, selectedShortcutPoint);
           editor3DNeedsSync = true;
         }
       } else if (dragType === 'shortcut-end') {
         const sc = editorShortcuts[dragIdx];
-        const hitTrack = splineHitTest(mx, my);
+        const hitTrack = getClosestTrackSample(mx, my);
         if (sc && hitTrack) {
           sc.endSampleIdx = hitTrack.sampleIdx;
+          showShortcutPointInfo(dragIdx, selectedShortcutPoint);
+          editor3DNeedsSync = true;
+        }
+      } else if (dragType === 'shortcut-curve') {
+        const sc = editorShortcuts[dragIdx];
+        if (sc && dragShortcutStartPos && dragShortcutInitialCPs) {
+          const curPos = canvasToWorld(mx, my);
+          const dx = Math.round(curPos.x - dragShortcutStartPos.x);
+          const dz = Math.round(curPos.z - dragShortcutStartPos.z);
+          sc.controlPoints = dragShortcutInitialCPs.map(cp => [
+            Math.round(cp[0] + dx),
+            cp[1] || 0,
+            Math.round(cp[2] + dz)
+          ]);
+          editor3DNeedsSync = true;
+        }
+      } else if (dragType === 'shortcut-elevate-drag' && selectedShortcutPoint && selectedShortcutPoint.type === 'cp') {
+        const sc = editorShortcuts[dragIdx];
+        if (sc && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+          const deltaY = Math.round(-(my - dragElevationStartMouseY) * 0.4);
+          const newY = Math.max(-40, Math.min(120, dragElevationStartY + deltaY));
+          sc.controlPoints[selectedShortcutPoint.cpIdx][1] = newY;
+          syncHeightSliders(newY);
+          showShortcutPointInfo(dragIdx, selectedShortcutPoint);
+          editor3DNeedsSync = true;
+        }
+      } else if (dragType === 'point-elevate-drag') {
+        if (controlPoints[dragIdx]) {
+          const deltaY = Math.round(-(my - dragElevationStartMouseY) * 0.4);
+          const newY = Math.max(-50, Math.min(120, dragElevationStartY + deltaY));
+          controlPoints[dragIdx].y = newY;
+          syncHeightSliders(newY);
+          showPointInfo(dragIdx);
           editor3DNeedsSync = true;
         }
       } else if ((['obs','ramp','pu'].includes(dragType)) && controlPoints.length >= 2) {
@@ -1631,10 +2115,20 @@
       } else {
         canvas.style.cursor = 'grab';
       }
+    } else if (tool === 'shortcut-elevate' || tool === 'elevate') {
+      if (hoverShortcutPoint && hoverShortcutPoint.type === 'cp') {
+        canvas.style.cursor = 'ns-resize';
+      } else if (hitTest(mx, my) >= 0) {
+        canvas.style.cursor = 'ns-resize';
+      } else {
+        canvas.style.cursor = 'crosshair';
+      }
+    } else if (tool === 'shortcut-add-point') {
+      canvas.style.cursor = 'copy';
     }
 
     // Redibujar en tiempo real para placement ghost y hover
-    if (['terrain-add', 'shortcut-add', 'add', 'move', 'terrain-delete', 'shortcut-delete'].includes(tool)) {
+    if (['terrain-add', 'shortcut-add', 'shortcut-add-point', 'shortcut-elevate', 'elevate', 'add', 'move', 'terrain-delete', 'shortcut-delete'].includes(tool)) {
       render();
     }
   }
@@ -1647,10 +2141,14 @@
       canvas.style.cursor = curs;
     }
     if (dragging) { 
-      if (dragType === 'terrain' || dragType === 'tunnel-rotate' || dragType === 'shortcut-cp' || dragType === 'shortcut-start' || dragType === 'shortcut-end') {
+      if (dragType === 'terrain' || dragType === 'tunnel-rotate' || dragType === 'shortcut-cp' || dragType === 'shortcut-start' || dragType === 'shortcut-end' || dragType === 'shortcut-curve' || dragType === 'shortcut-elevate-drag' || dragType === 'point-elevate-drag') {
         editor3DNeedsSync = true;
         sync3DIfNeeded();
       }
+      dragShortcutStartPos = null;
+      dragShortcutInitialCPs = null;
+      dragElevationStartY = 0;
+      dragElevationStartMouseY = 0;
       dragging = false; dragIdx = -1; dragType = null; isRotatingTunnel = false;
       canvas.style.cursor = 'grab'; 
       pushHistory();
@@ -1685,8 +2183,10 @@
   // ────────────────────────────────────────────────────
   function catmullRomPoint(p0, p1, p2, p3, t) {
     const t2 = t * t, t3 = t2 * t;
+    const y0 = p0.y || 0, y1 = p1.y || 0, y2 = p2.y || 0, y3 = p3.y || 0;
     return {
       x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2*p0.x - 5*p1.x + 4*p2.x - p3.x) * t2 + (-p0.x + 3*p1.x - 3*p2.x + p3.x) * t3),
+      y: 0.5 * ((2 * y1) + (-y0 + y2) * t + (2*y0 - 5*y1 + 4*y2 - y3) * t2 + (-y0 + 3*y1 - 3*y2 + y3) * t3),
       z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t + (2*p0.z - 5*p1.z + 4*p2.z - p3.z) * t2 + (-p0.z + 3*p1.z - 3*p2.z + p3.z) * t3)
     };
   }
@@ -1890,7 +2390,8 @@
           ctx.stroke();
 
           // Badge flotante
-          const badgeText = `ATAJO #${sIdx + 1} PUNTO CP#${cpIdx + 1} [X:${Math.round(cp[0])}, Z:${Math.round(cp[2])}] | Ø ≥150px`;
+          const elevY = Math.round(cp[1] || 0);
+          const badgeText = `ATAJO #${sIdx + 1} PUNTO CP#${cpIdx + 1} [X:${Math.round(cp[0])}, Y:${elevY >= 0 ? '+' : ''}${elevY}u, Z:${Math.round(cp[2])}] | Ø ≥150px`;
           ctx.font = "bold 10px 'Share Tech Mono', monospace";
           const tw = ctx.measureText(badgeText).width;
           ctx.fillStyle = 'rgba(16, 14, 10, 0.9)';
@@ -1916,6 +2417,16 @@
         ctx.font = `bold ${Math.max(7, 9 / zoom)}px 'Share Tech Mono', monospace`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(`CP${cpIdx + 1}`, scCp.x, scCp.y);
+
+        // Etiqueta de elevación si != 0 o si está seleccionado
+        if (Math.abs(elevY) > 0 || isCpSelected) {
+          ctx.save();
+          ctx.font = `bold ${Math.max(8, 10 / zoom)}px 'Share Tech Mono', monospace`;
+          ctx.fillStyle = elevY > 0 ? '#00ff88' : elevY < 0 ? '#ff4466' : '#ffcc00';
+          ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+          ctx.fillText(`Y:${elevY >= 0 ? '+' : ''}${elevY}u`, scCp.x + nodeR + 3, scCp.y);
+          ctx.restore();
+        }
       }
 
       // ── 5. Ancla de Inicio (⚓ anchorStart) ──
@@ -3249,7 +3760,7 @@
 
         const sc3DPts = scGeom.pts.map(p => new THREE.Vector3(
           p.x * this.worldScale,
-          0.06,
+          (p.y || 0) * this.worldScale + 0.06,
           p.z * this.worldScale
         ));
         const scCurve = new THREE.CatmullRomCurve3(sc3DPts, false);

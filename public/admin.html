@@ -178,15 +178,19 @@
     /* Point info panel */
     #point-info {
       position: absolute; bottom: 14px; right: 14px;
-      background: rgba(0,0,0,0.85); backdrop-filter: blur(8px);
+      background: rgba(0,0,0,0.88); backdrop-filter: blur(8px);
       border: 1px solid var(--sw-border);
       clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
-      padding: 1rem; min-width: 190px; display: none;
+      padding: 0.9rem; min-width: 210px; display: none; z-index: 20;
     }
     #point-info.visible { display: block; }
-    #point-info .sw-section-title { margin-bottom: 0.6rem; }
+    #point-info .sw-section-title { margin-bottom: 0.3rem; }
+    #pi-subtitle {
+      font-family: var(--sw-font-m); font-size: 0.62rem;
+      color: rgba(245,245,245,0.55); margin-bottom: 0.5rem; letter-spacing: 0.04em;
+    }
     .pi-row { display: flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
-    .pi-row label { font-family: var(--sw-font-m); font-size: 0.6rem; color: rgba(163,0,0,0.7); width: 12px; }
+    .pi-row label { font-family: var(--sw-font-m); font-size: 0.65rem; color: #ff4444; width: 14px; font-weight: bold; }
     .pi-row input {
       flex: 1; background: var(--sw-dark); border: 1px solid var(--sw-border);
       color: var(--sw-white); font-family: var(--sw-font-m); font-size: 0.75rem;
@@ -194,6 +198,8 @@
       clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
     }
     .pi-row input:focus { border-color: var(--sw-red); }
+    #pi-actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
+    #pi-actions .sw-tool-btn { padding: 0.3rem 0.5rem; font-size: 0.65rem; }
 
     /* Zoom indicator */
     #zoom-indicator {
@@ -509,10 +515,16 @@
       </div>
 
       <!-- Atajos -->
-      <div class="sw-section">
+      <div class="sw-section" id="section-shortcuts">
         <div class="sw-section-title">// Atajos</div>
         <button class="sw-tool-btn" id="tool-shortcut-add">
           <i class="fa fa-code-branch"></i> Crear atajo
+        </button>
+        <button class="sw-tool-btn" id="tool-shortcut-add-point">
+          <i class="fa fa-plus-circle"></i> Añadir punto a atajo
+        </button>
+        <button class="sw-tool-btn" id="tool-shortcut-elevate">
+          <i class="fa fa-arrows-alt-v"></i> Elevar punto de atajo
         </button>
         <button class="sw-tool-btn danger" id="tool-shortcut-delete">
           <i class="fa fa-cut"></i> Eliminar atajo
@@ -520,9 +532,39 @@
         <button class="sw-tool-btn danger" id="btn-clear-shortcuts">
           <i class="fa fa-trash-alt"></i> Limpiar atajos
         </button>
+
+        <!-- Controles contextuales del atajo / punto seleccionado -->
+        <div id="sc-selected-controls" style="margin-top:0.6rem; padding-top:0.6rem; border-top:1px solid rgba(163,0,0,0.3); display:none;">
+          <div style="font-family:var(--sw-font-m); font-size:0.65rem; color:#ffaa00; margin-bottom:0.4rem; letter-spacing:0.05em;" id="sc-selected-label">
+            ATAJO SELECCIONADO
+          </div>
+          <div class="sw-field" id="sc-height-field">
+            <div class="sw-range-label">
+              <span>Elevación Punto (Y)</span>
+              <b id="sc-height-val">0</b> u
+            </div>
+            <input type="range" id="sc-height" min="-40" max="120" step="1" value="0" />
+          </div>
+          <div class="sw-field" id="sc-width-field">
+            <div class="sw-range-label">
+              <span>Ancho Atajo</span>
+              <b id="sc-width-val">10</b> u
+            </div>
+            <input type="range" id="sc-width" min="6" max="35" step="1" value="10" />
+          </div>
+          <div style="display:flex; gap:0.4rem; margin-top:0.4rem;">
+            <button class="sw-tool-btn" id="btn-sc-del-pt" style="flex:1; font-size:0.65rem; border-color:rgba(255,68,68,0.5); color:#ff6666;" title="Eliminar punto CP seleccionado">
+              <i class="fa fa-times"></i> Borrar CP
+            </button>
+            <button class="sw-tool-btn" id="btn-sc-add-cp" style="flex:1; font-size:0.65rem;" title="Insertar punto CP después del seleccionado">
+              <i class="fa fa-plus"></i> Añadir CP
+            </button>
+          </div>
+        </div>
+
         <p class="sw-point-count" id="shortcut-count">0 atajos</p>
         <p style="font-size:0.75rem; color:rgba(245,245,245,0.45); margin:0.3rem 0; line-height:1.2;">
-          💡 En modo Mover podés arrastrar las anclas ⚓/🎯 y los puntos intermedios CP para editar cualquier atajo.
+          💡 En modo Mover podés arrastrar anclas ⚓/🎯 y CPs. En modo Elevar podés ajustar la altura.
         </p>
       </div>
 
@@ -690,16 +732,29 @@
         <kbd>Del</kbd> borrar seleccionado
       </div>
 
-      <!-- Point info -->
+      <!-- Point info / Inspector -->
       <div id="point-info">
-        <div class="sw-section-title"><i class="fa fa-map-pin"></i> &nbsp;PUNTO SELECCIONADO</div>
+        <div class="sw-section-title" id="pi-title"><i class="fa fa-map-pin"></i> &nbsp;PUNTO SELECCIONADO</div>
+        <div id="pi-subtitle"></div>
         <div class="pi-row">
           <label>X</label>
           <input type="number" id="pi-x" step="1" />
         </div>
+        <div class="pi-row" id="pi-row-y">
+          <label>Y</label>
+          <input type="number" id="pi-y" step="1" value="0" />
+        </div>
         <div class="pi-row">
           <label>Z</label>
           <input type="number" id="pi-z" step="1" />
+        </div>
+        <div id="pi-actions">
+          <button class="sw-tool-btn danger" id="pi-btn-del" style="flex:1;">
+            <i class="fa fa-trash"></i> Eliminar
+          </button>
+          <button class="sw-tool-btn" id="pi-btn-add" style="flex:1; display:none;">
+            <i class="fa fa-plus"></i> Añadir CP
+          </button>
         </div>
       </div>
 
