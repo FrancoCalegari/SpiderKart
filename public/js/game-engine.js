@@ -2045,10 +2045,12 @@
   function hideFinishScreen() {
     const finishEl = document.getElementById('finish-screen');
     if (finishEl) finishEl.classList.remove('active');
+    state.raceFinishedWaiting = false;
     hideWaitingAllFinishedHUD();
   }
 
   function showClassificationScreen(results = [], totalLaps = TOTAL_LAPS) {
+    state.raceFinishedWaiting = false;
     hideWaitingAllFinishedHUD();
     stopRendering(); // Detener el renderizado 3D de la pista
 
@@ -3116,7 +3118,24 @@
   const clock = new THREE.Clock();
 
   function update(dt) {
-    if (state.raceFinished) return; // congelar al terminar
+    if (state.raceFinished && !state.raceFinishedWaiting) return; // congelar al terminar completamente
+
+    if (state.raceFinishedWaiting) {
+      // Piloto local ya cruzó la meta pero espera a que los demás completen su carrera:
+      // Desacelerar suavemente hasta detenerse, pero mantener actualización de karts remotos,
+      // misiles y rampas para observar a los rivales competir hasta el final.
+      state.speed *= 0.94;
+      if (Math.abs(state.speed) < 0.005) state.speed = 0;
+      state.posX += Math.cos(state.angle) * state.speed;
+      state.posZ += Math.sin(state.angle) * state.speed;
+      resolveTrackCollision(dt);
+      kartGroup.position.set(state.posX, state.posY, state.posZ);
+      kartGroup.rotation.y = -state.angle + Math.PI / 2;
+      updateRemoteKarts(dt);
+      updateMissiles(dt);
+      updateRamps(dt);
+      return;
+    }
     
     updateMissiles(dt);
     updateRamps(dt);
@@ -3716,8 +3735,23 @@
     hideFinishScreen,
     showWaitingAllFinishedHUD,
     hideWaitingAllFinishedHUD,
+    setTotalLaps(laps) {
+      if (typeof laps === 'number' && laps >= 1) {
+        TOTAL_LAPS = laps;
+        if (hudLap && !state.raceFinished) {
+          const displayLap = Math.min(state.lap + 1, TOTAL_LAPS);
+          hudLap.textContent = `VUELTA ${displayLap} / ${TOTAL_LAPS}`;
+        }
+      }
+    },
+    getTotalLaps() {
+      return TOTAL_LAPS;
+    },
     updateFinishProgress(finishedCount, totalCount) {
-      showWaitingAllFinishedHUD(finishedCount, totalCount);
+      // Solo mostrar el banner de espera si el piloto local YA cruzó la meta
+      if (state.raceFinishedWaiting || state.raceFinished) {
+        showWaitingAllFinishedHUD(finishedCount, totalCount);
+      }
     },
     updateRematchStatus(readyCount, totalCount, readyIds) {
       const rematchInfo = document.getElementById('fs-rematch-info');

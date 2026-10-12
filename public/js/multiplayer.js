@@ -348,7 +348,7 @@
   }
 
 
-  // Escuchar migración de sala desde el frame padre (split.html)
+  // Escuchar migración de sala o revancha desde el frame padre (split.html)
   window.addEventListener('message', e => {
     if (e.data?.type === 'sk-migrate') {
       const newRoom = e.data.room;
@@ -356,6 +356,16 @@
       if (mainMenu) mainMenu.style.display = 'none';
       window.sessionStorage.setItem('sk_hide_menu', '1');
       connect(newRoom, newName);
+    } else if (e.data?.type === 'sk-trigger-rematch') {
+      if (ws && ws.connected) {
+        ws.emit('message', { type: 'rematch_ready', ready: true });
+        const rematchBtn = document.getElementById('fs-btn-rematch');
+        if (rematchBtn) {
+          rematchBtn.classList.add('ready');
+          const rematchBtnText = document.getElementById('fs-rematch-btn-text');
+          if (rematchBtnText) rematchBtnText.textContent = '¡LISTO! ESPERANDO A LOS DEMÁS...';
+        }
+      }
     }
   });
 
@@ -609,6 +619,7 @@
         race.startedAt = performance.now();
         race.finished = false;
         if (window.SpiderKart) {
+          if (window.SpiderKart.setTotalLaps) window.SpiderKart.setTotalLaps(race.laps);
           if (window.SpiderKart.hideFinishScreen) window.SpiderKart.hideFinishScreen();
           if (window.SpiderKart.resumeRendering) window.SpiderKart.resumeRendering();
           if (window.SpiderKart.setCountdown) window.SpiderKart.setCountdown(0);
@@ -626,7 +637,17 @@
         if (window.SpiderKart && window.SpiderKart.updateFinishProgress) {
           window.SpiderKart.updateFinishProgress(msg.finishedCount, msg.totalCount);
         }
-        setRaceStatus(`Esperando a todos los pilotos... (${msg.finishedCount}/${msg.totalCount} en meta)`);
+        if (race.finished) {
+          setRaceStatus(`Esperando a todos los pilotos... (${msg.finishedCount}/${msg.totalCount} en meta)`);
+        } else {
+          setRaceStatus(`¡Piloto en meta! (${msg.finishedCount}/${msg.totalCount}). ¡Completa tu carrera!`);
+        }
+        break;
+
+      case 'dnf_countdown':
+        if (!race.finished) {
+          setRaceStatus(`¡TIEMPO LÍMITE! ${msg.seconds}s para cruzar la meta.`);
+        }
         break;
 
       case 'rematch_status':

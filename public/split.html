@@ -89,6 +89,7 @@
 <div id="outer-hud">
   <button class="btn btn-sm btn-ghost" onclick="location.href='/'"><i class="fa-solid fa-house"></i> PORTAL</button>
   <button class="btn btn-sm btn-ghost" onclick="backToSetup()"><i class="fa-solid fa-bars"></i> MENÚ</button>
+  <button class="btn btn-sm btn-ghost" id="btn-split-rematch" onclick="triggerSplitRematch()" title="Listo para revancha en todos los jugadores"><i class="fa-solid fa-rotate-right"></i> REVANCHA</button>
   <button class="btn btn-sm btn-green" onclick="openOnline()"><i class="fa-solid fa-globe"></i> ONLINE</button>
   <span id="hud-room"></span>
 </div>
@@ -394,6 +395,15 @@ function migrateAll(roomName) {
     } catch(_) {}
   });
   document.getElementById('hud-room').textContent = `ONLINE: ${roomName}`;
+}
+
+// Disparar revancha simultánea en todos los jugadores
+function triggerSplitRematch() {
+  iframes.forEach(fr => {
+    try {
+      fr.contentWindow.postMessage({ type: 'sk-trigger-rematch' }, '*');
+    } catch(_) {}
+  });
 }
 </script>
 </body>

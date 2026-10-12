@@ -643,6 +643,7 @@ function handleLeave(socket) {
         broadcastToRoom(roomName, { type: 'player_left', id });
         
         if (room.players.length === 0 && !room.isSystemRoom) {
+            if (room.dnfTimer) { clearInterval(room.dnfTimer); room.dnfTimer = null; }
             delete rooms[roomName];
         } else if (room.phase === 'racing') {
             // Si un jugador se va durante la carrera, chequear si los restantes ya terminaron
@@ -678,17 +679,20 @@ function startCountdown(roomName) {
     const room = rooms[roomName];
     if (!room) return;
     if (room.countdownInterval) clearInterval(room.countdownInterval);
+    if (room.dnfTimer) { clearInterval(room.dnfTimer); room.dnfTimer = null; }
 
     const isSplit = roomName.startsWith('SPLIT_');
 
     function beginRaceCountdown() {
         if (room.countdownInterval) clearInterval(room.countdownInterval);
+        if (room.dnfTimer) { clearInterval(room.dnfTimer); room.dnfTimer = null; }
         room.phase = 'countdown';
         room.countdown = 3;
         
         room.players.forEach((p, idx) => { 
             p.startPosition = idx;
             p.timeMs = 0;
+            p.dnf = false;
             p.rematchReady = false;
         });
         
@@ -737,6 +741,25 @@ function startCountdown(roomName) {
     }
 }
 
+function endRace(roomName) {
+    const room = rooms[roomName];
+    if (!room || room.phase !== 'racing') return;
+    if (room.dnfTimer) {
+        clearInterval(room.dnfTimer);
+        room.dnfTimer = null;
+    }
+    room.phase = 'finished';
+    const results = room.players
+        .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs, color: p.color, dnf: !!p.dnf }))
+        .sort((a, b) => a.timeMs - b.timeMs)
+        .map((r, idx) => ({ ...r, position: idx + 1 }));
+
+    // Resetear banderas de revancha
+    room.players.forEach(p => { p.rematchReady = false; });
+
+    broadcastToRoom(roomName, { type: 'race_results', results, saved: false, laps: room.laps });
+}
+
 function checkRaceFinish(roomName) {
     const room = rooms[roomName];
     if (!room || room.phase !== 'racing') return;
@@ -754,22 +777,51 @@ function checkRaceFinish(roomName) {
     });
 
     // En multijugador se debe de esperar a que TODOS los pilotos crucen la línea de meta de su última vuelta
-    if (pending.length > 0) {
-        // Aún hay pilotos pendientes en pista
+    if (pending.length === 0) {
+        // Todos los pilotos terminaron su última vuelta!
+        endRace(roomName);
         return;
     }
 
-    // Todos los pilotos terminaron su última vuelta!
-    room.phase = 'finished';
-    const results = room.players
-        .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs, color: p.color }))
-        .sort((a, b) => a.timeMs - b.timeMs)
-        .map((r, idx) => ({ ...r, position: idx + 1 }));
+    // Si al menos 1 piloto ya cruzó y quedan pilotos pendientes en pista,
+    // arrancar un temporizador de gracia DNF (45 segundos) para no bloquear indefinidamente la sala
+    if (finished.length >= 1 && pending.length > 0 && !room.dnfTimer) {
+        room.dnfSeconds = 45;
+        broadcastToRoom(roomName, {
+            type: 'dnf_countdown',
+            seconds: room.dnfSeconds,
+            pendingNames: pending.map(p => p.name)
+        });
 
-    // Resetear banderas de revancha
-    room.players.forEach(p => { p.rematchReady = false; });
-
-    broadcastToRoom(roomName, { type: 'race_results', results, saved: false, laps: room.laps });
+        room.dnfTimer = setInterval(() => {
+            if (!rooms[roomName] || room.phase !== 'racing') {
+                if (room.dnfTimer) clearInterval(room.dnfTimer);
+                room.dnfTimer = null;
+                return;
+            }
+            room.dnfSeconds--;
+            if (room.dnfSeconds > 0) {
+                if (room.dnfSeconds % 5 === 0 || room.dnfSeconds <= 10) {
+                    broadcastToRoom(roomName, {
+                        type: 'dnf_countdown',
+                        seconds: room.dnfSeconds,
+                        pendingNames: room.players.filter(p => p.timeMs <= 0).map(p => p.name)
+                    });
+                }
+            } else {
+                clearInterval(room.dnfTimer);
+                room.dnfTimer = null;
+                // Asignar DNF a los pilotos que no alcanzaron a cruzar
+                const nowPending = room.players.filter(p => p.timeMs <= 0);
+                const maxFinishedTime = Math.max(...room.players.map(p => p.timeMs).filter(t => t > 0), 60000);
+                nowPending.forEach((p, idx) => {
+                    p.timeMs = maxFinishedTime + 30000 + (idx * 1000);
+                    p.dnf = true;
+                });
+                endRace(roomName);
+            }
+        }, 1000);
+    }
 }
 
 io.on('connection', (socket) => {
@@ -830,7 +882,10 @@ io.on('connection', (socket) => {
                     }, socket);
 
                     const expectedSplit = (data.splitPlayers && data.splitPlayers >= 2) ? data.splitPlayers : 2;
-                    const effectiveMin = isSplitRoom ? expectedSplit : MIN_PLAYERS;
+                    if (isSplitRoom || data.splitPlayers) {
+                        room.expectedSplit = expectedSplit;
+                    }
+                    const effectiveMin = isSplitRoom ? (room.expectedSplit || expectedSplit) : MIN_PLAYERS;
 
                     if (room.phase === 'waiting' && room.players.length >= effectiveMin) {
                         startCountdown(roomName);
