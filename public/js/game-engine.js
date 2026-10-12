@@ -1865,32 +1865,295 @@
       }
     });
   }
+  // ── Gamepad Navigation, Menú y Toasts Plug-and-Play ──
+  let isGamePaused = false;
+  let lastMenuNavTime = 0;
+  const MENU_NAV_DEBOUNCE_MS = 190;
+  const lastBtnState = {};
+
+  function showGpToast(msg, icon = 'gamepad') {
+    const container = document.getElementById('gp-toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.style.cssText = 'background:rgba(12,10,18,0.94); border:1px solid #ff3333; color:#fff; padding:10px 18px; border-radius:4px; font-family:"Share Tech Mono", monospace; font-size:0.85rem; letter-spacing:1px; box-shadow:0 0 20px rgba(255,51,51,0.5); display:flex; align-items:center; gap:10px; transition:opacity 0.4s ease, transform 0.4s ease; transform:translateX(20px); opacity:0;';
+    toast.innerHTML = `<i class="fa-solid fa-${icon}" style="color:#ff3333; font-size:1rem;"></i> <span>${msg}</span>`;
+    container.appendChild(toast);
+    requestAnimationFrame(() => {
+      toast.style.transform = 'translateX(0)';
+      toast.style.opacity = '1';
+    });
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(20px)';
+      setTimeout(() => toast.remove(), 450);
+    }, 2800);
+  }
+
+  window.addEventListener('gamepadconnected', e => {
+    showGpToast(`JOYSTICK DETECTADO: [${e.gamepad.index}] ${e.gamepad.id.slice(0, 22)}...`);
+  });
+
+  window.addEventListener('gamepaddisconnected', e => {
+    showGpToast(`JOYSTICK DESCONECTADO: [${e.gamepad.index}]`);
+  });
+
+  function getActiveMenuContainer() {
+    const pauseModal = document.getElementById('pause-modal');
+    if (pauseModal && pauseModal.style.display !== 'none') return pauseModal;
+
+    const settingsModal = document.getElementById('settings-modal');
+    if (settingsModal && settingsModal.style.display !== 'none') return settingsModal;
+
+    const finishScreen = document.getElementById('finish-screen');
+    if (finishScreen && finishScreen.style.display !== 'none') return finishScreen;
+
+    const mpLobby = document.getElementById('mp-lobby');
+    if (mpLobby && mpLobby.style.display !== 'none') return mpLobby;
+
+    const mainMenu = document.getElementById('main-menu');
+    if (mainMenu && mainMenu.style.display !== 'none') return mainMenu;
+
+    return null;
+  }
+
+  function togglePauseMenu(force) {
+    if (isSplitMode) return;
+    const pauseModal = document.getElementById('pause-modal');
+    if (!pauseModal) return;
+
+    const nextState = (force !== undefined) ? !!force : !isGamePaused;
+    isGamePaused = nextState;
+
+    if (isGamePaused) {
+      pauseModal.style.display = 'flex';
+      const subtext = document.getElementById('pause-subtext');
+      if (subtext) {
+        if (window.SpiderKartMP && window.SpiderKartMP.isConnected && window.SpiderKartMP.isConnected()) {
+          subtext.textContent = 'MULTIJUGADOR ACTIVO (LA FÍSICA ONLINE CONTINÚA)';
+        } else {
+          subtext.textContent = 'CARRERA EN PAUSA';
+        }
+      }
+      document.querySelectorAll('.gp-focused').forEach(el => el.classList.remove('gp-focused'));
+      const resumeBtn = document.getElementById('btn-pause-resume');
+      if (resumeBtn) resumeBtn.classList.add('gp-focused');
+    } else {
+      pauseModal.style.display = 'none';
+      document.querySelectorAll('.gp-focused').forEach(el => el.classList.remove('gp-focused'));
+    }
+  }
+
+  function quickRestartRace() {
+    if (isSplitMode) return;
+    togglePauseMenu(false);
+    resetRace(0, true);
+    showGpToast('CARRERA REINICIADA', 'rotate-right');
+  }
+
+  function handleGamepadMenuNavigation(gp) {
+    if (!gp) return;
+    const now = performance.now();
+
+    const isBtnJustPressed = (btnIndex) => {
+      const isPressed = !!(gp.buttons[btnIndex] && gp.buttons[btnIndex].pressed);
+      const wasPressed = !!lastBtnState[btnIndex];
+      lastBtnState[btnIndex] = isPressed;
+      return isPressed && !wasPressed;
+    };
+
+    // Botón 9 (START): Pausa / Reanudar
+    if (isBtnJustPressed(9)) {
+      const mainMenu = document.getElementById('main-menu');
+      const isMainMenuVisible = mainMenu && mainMenu.style.display !== 'none';
+      if (!isMainMenuVisible && !isSplitMode) {
+        togglePauseMenu();
+        return;
+      }
+    }
+
+    // Botón 8 (SELECT): Reinicio rápido solo / Revancha
+    if (isBtnJustPressed(8)) {
+      const mainMenu = document.getElementById('main-menu');
+      const isMainMenuVisible = mainMenu && mainMenu.style.display !== 'none';
+      if (!isMainMenuVisible && !isSplitMode) {
+        if (state.raceFinished) {
+          const btnRematch = document.getElementById('btn-rematch');
+          if (btnRematch) btnRematch.click();
+        } else {
+          quickRestartRace();
+        }
+        return;
+      }
+    }
+
+    const activeContainer = getActiveMenuContainer();
+    if (!activeContainer) {
+      const prev = document.querySelectorAll('.gp-focused');
+      prev.forEach(el => el.classList.remove('gp-focused'));
+      return;
+    }
+
+    // Elementos navegables con foco en el menú activo
+    const focusables = Array.from(activeContainer.querySelectorAll('.gp-focusable, button, input, select'))
+      .filter(el => {
+        if (el.disabled || el.type === 'hidden') return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).display !== 'none' && window.getComputedStyle(el).visibility !== 'hidden';
+      });
+
+    if (!focusables.length) return;
+
+    let currentIdx = focusables.findIndex(el => el.classList.contains('gp-focused'));
+    if (currentIdx === -1) {
+      currentIdx = 0;
+      focusables[0].classList.add('gp-focused');
+    }
+
+    // D-Pad Arriba (12) / Abajo (13) o Stick Y
+    const stickY = (gp.axes && gp.axes[1] !== undefined) ? gp.axes[1] : 0;
+    const moveDown = (gp.buttons[13] && gp.buttons[13].pressed) || stickY > 0.55;
+    const moveUp = (gp.buttons[12] && gp.buttons[12].pressed) || stickY < -0.55;
+
+    if ((moveDown || moveUp) && (now - lastMenuNavTime > MENU_NAV_DEBOUNCE_MS)) {
+      lastMenuNavTime = now;
+      focusables[currentIdx].classList.remove('gp-focused');
+      if (moveDown) {
+        currentIdx = (currentIdx + 1) % focusables.length;
+      } else {
+        currentIdx = (currentIdx - 1 + focusables.length) % focusables.length;
+      }
+      focusables[currentIdx].classList.add('gp-focused');
+      if (typeof focusables[currentIdx].scrollIntoView === 'function') {
+        focusables[currentIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+
+    // Botón 0 (A / Cross): Confirmar / Clic
+    if (isBtnJustPressed(0)) {
+      const el = focusables[currentIdx];
+      if (el) {
+        el.classList.add('gp-focused');
+        el.style.transform = 'scale(0.96)';
+        setTimeout(() => { if (el) el.style.transform = ''; }, 120);
+        el.click();
+      }
+    }
+
+    // Botón 1 (B / Circle): Cancelar / Volver / Cerrar pausa
+    if (isBtnJustPressed(1)) {
+      const pauseModal = document.getElementById('pause-modal');
+      if (pauseModal && pauseModal.style.display !== 'none') {
+        togglePauseMenu(false);
+        return;
+      }
+      const settingsModal = document.getElementById('settings-modal');
+      if (settingsModal && settingsModal.style.display !== 'none') {
+        const btnClose = document.getElementById('btn-close-settings');
+        if (btnClose) btnClose.click();
+        return;
+      }
+      const mpLobby = document.getElementById('mp-lobby');
+      if (mpLobby && mpLobby.style.display !== 'none') {
+        const btnBack = document.getElementById('btn-back-mm');
+        if (btnBack) btnBack.click();
+        return;
+      }
+    }
+  }
+
+  function initPauseMenu() {
+    const btnResume = document.getElementById('btn-pause-resume');
+    if (btnResume) {
+      btnResume.addEventListener('click', () => togglePauseMenu(false));
+    }
+
+    const btnRestart = document.getElementById('btn-pause-restart');
+    if (btnRestart) {
+      btnRestart.addEventListener('click', () => quickRestartRace());
+    }
+
+    const btnSettings = document.getElementById('btn-pause-settings');
+    if (btnSettings) {
+      btnSettings.addEventListener('click', () => {
+        const settingsModal = document.getElementById('settings-modal');
+        if (settingsModal) {
+          settingsModal.style.display = 'flex';
+          setTimeout(() => {
+            document.querySelectorAll('.gp-focused').forEach(el => el.classList.remove('gp-focused'));
+            const btnClose = document.getElementById('btn-close-settings');
+            if (btnClose) btnClose.classList.add('gp-focused');
+          }, 50);
+        }
+      });
+    }
+
+    const btnExit = document.getElementById('btn-pause-exit');
+    if (btnExit) {
+      btnExit.addEventListener('click', () => {
+        togglePauseMenu(false);
+        const exitRaceBtn = document.getElementById('btn-exit-race');
+        if (exitRaceBtn) {
+          exitRaceBtn.click();
+        } else {
+          SpiderKart.returnToMenu();
+        }
+      });
+    }
+
+    // Tecla Escape para pausar/reanudar con teclado
+    window.addEventListener('keydown', e => {
+      if (e.code === 'Escape') {
+        const settingsModal = document.getElementById('settings-modal');
+        if (settingsModal && settingsModal.style.display !== 'none') {
+          const btnClose = document.getElementById('btn-close-settings');
+          if (btnClose) btnClose.click();
+          return;
+        }
+        const mainMenu = document.getElementById('main-menu');
+        if (mainMenu && mainMenu.style.display !== 'none') return;
+        togglePauseMenu();
+      }
+    });
+  }
+
   function pollGamepads() {
-      // En splitMode, el frame padre (split.html) maneja todos los gamepads y
-      // los envía vía postMessage. No polleamos aquí para evitar doble input.
-      if (isKeyboardOnly || isSplitMode) return;
+      if (isKeyboardOnly) return;
       const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-      gamepadInput = { forward: false, backward: false, left: false, right: false, jump: false, power: false };
+      gamepadInput = { forward: false, backward: false, left: false, right: false, jump: false, power: false, missile: false };
       
       let targetGp = null;
       if (forcedGamepad !== null && gamepads[forcedGamepad]) {
           targetGp = gamepads[forcedGamepad];
       } else if (forcedGamepad === null) {
-          // Default to first connected gamepad
           for (let i = 0; i < gamepads.length; i++) {
               if (gamepads[i]) { targetGp = gamepads[i]; break; }
           }
       }
+
+      if (targetGp) {
+          handleGamepadMenuNavigation(targetGp);
+      }
+
+      // Si está en splitMode, o la carrera está en pausa o en el menú principal, no aplicamos driving inputs
+      const activeMenu = getActiveMenuContainer();
+      if (isSplitMode || isGamePaused || (activeMenu && activeMenu.id === 'main-menu')) return;
       
       if (targetGp) {
           // Eje Izquierdo (X)
           if (targetGp.axes[0] < -0.3) gamepadInput.left = true;
           if (targetGp.axes[0] > 0.3) gamepadInput.right = true;
+
+          // Cruceta D-Pad (dirección y aceleración)
+          if (targetGp.buttons[14] && targetGp.buttons[14].pressed) gamepadInput.left = true;
+          if (targetGp.buttons[15] && targetGp.buttons[15].pressed) gamepadInput.right = true;
+          if (targetGp.buttons[12] && targetGp.buttons[12].pressed) gamepadInput.forward = true;
+          if (targetGp.buttons[13] && targetGp.buttons[13].pressed) gamepadInput.backward = true;
           
-          // Botones (Distribución típica Xbox)
+          // Botones (A/B/X/Y, Triggers y Bumpers)
           if (targetGp.buttons[0] && targetGp.buttons[0].pressed) gamepadInput.forward = true; // A
           if (targetGp.buttons[1] && targetGp.buttons[1].pressed) gamepadInput.backward = true; // B
           if (targetGp.buttons[2] && targetGp.buttons[2].pressed) gamepadInput.power = true; // X
+          if (targetGp.buttons[3] && targetGp.buttons[3].pressed) gamepadInput.missile = true; // Y
           if (targetGp.buttons[7] && targetGp.buttons[7].pressed) gamepadInput.forward = true; // RT
           if (targetGp.buttons[6] && targetGp.buttons[6].pressed) gamepadInput.backward = true; // LT
           if (targetGp.buttons[4] && targetGp.buttons[4].pressed) gamepadInput.jump = true; // LB
@@ -3224,7 +3487,7 @@
     const right      = splitInput.right    || keys['KeyD'] || (!isSplitMode && keys['ArrowRight']) || touchInput.right    || gamepadInput.right;
     const jumpKey    = splitInput.jump     || keys['Space'] || touchInput.jump  || gamepadInput.jump;
     const powerKey   = splitInput.power    || keys['KeyK'] || keys['KeyX'] || touchInput.power || gamepadInput.power;
-    const missileKey = splitInput.missile  || keys['KeyE'] || touchInput.missile;
+    const missileKey = splitInput.missile  || keys['KeyE'] || touchInput.missile || gamepadInput.missile;
     const turning    = left || right;
 
     // ── Turbo (Tecla K) ──
@@ -3677,7 +3940,7 @@
     animFrameId = requestAnimationFrame(animate);
     const dt = clock.getDelta();
     pollGamepads();
-    update(dt);
+    if (!isGamePaused) update(dt);
     updatePlayerMarkers();
     renderer.render(scene, camera);
   }
@@ -3764,8 +4027,15 @@
     returnToMenu() {
       hideFinishScreen();
       resumeRendering();
+      isGamePaused = false;
+      const pauseModal = document.getElementById('pause-modal');
+      if (pauseModal) pauseModal.style.display = 'none';
       const menuEl = document.getElementById('main-menu');
-      if (menuEl) menuEl.classList.remove('hidden');
+      if (menuEl) {
+        menuEl.classList.remove('hidden');
+        menuEl.style.display = 'flex';
+      }
+      state.isLocked = true;
     },
     resetRace(positionIndex = 0, doLocalCountdown = true) {
       state.lap = 0;
@@ -3925,11 +4195,16 @@
       }
     },
     trackHalfWidth: HALF_WIDTH,
-    startPoint: { x: startSample.x, z: startSample.z, angle: startAngle0 }
+    startPoint: { x: startSample.x, z: startSample.z, angle: startAngle0 },
+    togglePause: (force) => togglePauseMenu(force),
+    quickRestart: () => quickRestartRace(),
+    isPaused: () => isGamePaused,
+    showToast: (msg, icon) => showGpToast(msg, icon)
   };
 
   // Inicializar kart bloqueado en la grilla sin iniciar conteo automático al cargar
   state.isLocked = true;
 
+  initPauseMenu();
   animate();
 })();

@@ -859,6 +859,17 @@
       .mm-btn:hover i { color:#fff; }
       .mm-logo { color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:5rem; margin-bottom:15px; letter-spacing:4px; text-shadow:0 0 30px rgba(163,0,0,0.9), 0 0 10px rgba(255,255,255,0.2); animation: logoPulse 2s infinite alternate; }
       @keyframes logoPulse { from { text-shadow:0 0 20px rgba(163,0,0,0.6); } to { text-shadow:0 0 40px rgba(255,51,51,0.9); } }
+      /* ── Resaltado de Joystick / Gamepad ── */
+      .gp-focused {
+        outline: 2px solid #ff3333 !important;
+        box-shadow: 0 0 25px rgba(255, 51, 51, 0.85), inset 0 0 12px rgba(255, 51, 51, 0.4) !important;
+        background: rgba(163, 0, 0, 0.88) !important;
+        transform: scale(1.05) !important;
+        border-color: #ff5555 !important;
+        color: #fff !important;
+      }
+      .gp-focused i { color: #fff !important; }
+      .gp-focused::before { left: 100% !important; }
     </style>
 
     <h1 class="mm-logo">SPIDER<span style="color:#ff3333;">KART</span></h1>
@@ -877,26 +888,26 @@
     </div>
 
     <div id="mm-buttons" style="display:flex; flex-direction:column; gap:22px; width:340px;">
-      <button id="btn-best-lap" class="mm-btn"><i class="fa-solid fa-stopwatch"></i> MEJOR VUELTA</button>
-      <button id="btn-split-screen" class="mm-btn" onclick="location.href='/split.html'"><i class="fa-solid fa-users"></i> PANTALLA DIVIDIDA</button>
-      <button id="btn-multiplayer" class="mm-btn"><i class="fa-solid fa-globe"></i> MULTIJUGADOR</button>
-      <button id="btn-settings" class="mm-btn"><i class="fa-solid fa-gear"></i> AJUSTES</button>
+      <button id="btn-best-lap" class="mm-btn gp-focusable"><i class="fa-solid fa-stopwatch"></i> MEJOR VUELTA</button>
+      <button id="btn-split-screen" class="mm-btn gp-focusable" onclick="location.href='/split.html'"><i class="fa-solid fa-users"></i> PANTALLA DIVIDIDA</button>
+      <button id="btn-multiplayer" class="mm-btn gp-focusable"><i class="fa-solid fa-globe"></i> MULTIJUGADOR</button>
+      <button id="btn-settings" class="mm-btn gp-focusable"><i class="fa-solid fa-gear"></i> AJUSTES</button>
     </div>
 
     <!-- Lobby Multijugador -->
     <div id="mp-lobby" style="display:none; width:500px; max-width:90%; border:1px solid rgba(163,0,0,0.5); background:rgba(0,0,0,0.5); padding:20px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
         <h2 style="color:#a30000; font-family:'Barlow Condensed',sans-serif; font-size:1.5rem; margin:0;">SALAS ACTIVAS</h2>
-        <button id="btn-refresh-rooms" style="background:none; border:none; color:rgba(255,255,255,0.5); cursor:pointer; font-size:1.2rem;"><i class="fa-solid fa-rotate-right"></i></button>
+        <button id="btn-refresh-rooms" class="gp-focusable" style="background:none; border:none; color:rgba(255,255,255,0.5); cursor:pointer; font-size:1.2rem;"><i class="fa-solid fa-rotate-right"></i></button>
       </div>
       <div id="rooms-list" style="max-height:200px; overflow-y:auto; margin-bottom:20px; display:flex; flex-direction:column; gap:10px;">
         <!-- Rooms here -->
       </div>
       <div style="display:flex; gap:10px;">
         <input type="text" id="new-room-name" placeholder="Nombre de sala" maxlength="12" style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; font-family:inherit; outline:none;">
-        <button id="btn-create-room" style="background:#a30000; border:none; color:#fff; padding:10px 20px; font-family:inherit; cursor:pointer; font-weight:bold;">CREAR</button>
+        <button id="btn-create-room" class="gp-focusable" style="background:#a30000; border:none; color:#fff; padding:10px 20px; font-family:inherit; cursor:pointer; font-weight:bold;">CREAR</button>
       </div>
-      <button id="btn-back-mm" style="background:none; border:none; color:rgba(255,255,255,0.5); font-size:0.8rem; font-family:inherit; margin-top:20px; cursor:pointer;"><i class="fa-solid fa-arrow-left"></i> VOLVER AL MENÚ</button>
+      <button id="btn-back-mm" class="gp-focusable" style="background:none; border:none; color:rgba(255,255,255,0.5); font-size:0.8rem; font-family:inherit; margin-top:20px; cursor:pointer;"><i class="fa-solid fa-arrow-left"></i> VOLVER AL MENÚ</button>
     </div>
   </div>
 
@@ -927,7 +938,7 @@
       <div style="display:flex; flex-direction:column; gap:15px; text-align:left;">
         <div>
           <label style="color:#a30000; font-size:0.7rem; font-weight:bold; display:block; margin-bottom:5px;">RESOLUCIÓN</label>
-          <select id="setting-resolution" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:8px; font-family:inherit; outline:none; border-radius:3px;">
+          <select id="setting-resolution" class="gp-focusable" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:8px; font-family:inherit; outline:none; border-radius:3px;">
             <option value="1">100% (Normal)</option>
             <option value="0.75">75% (Optimizada)</option>
             <option value="0.5">50% (Rápida)</option>
@@ -935,7 +946,7 @@
         </div>
         <div>
           <label style="color:#a30000; font-size:0.7rem; font-weight:bold; display:block; margin-bottom:5px;">CALIDAD GRÁFICA</label>
-          <select id="setting-graphics" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:8px; font-family:inherit; outline:none; border-radius:3px;">
+          <select id="setting-graphics" class="gp-focusable" style="width:100%; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:8px; font-family:inherit; outline:none; border-radius:3px;">
             <option value="high">Alta (Sombras + Antialias)</option>
             <option value="low">Baja (Sin sombras)</option>
           </select>
@@ -943,11 +954,36 @@
       </div>
       
       <div style="display:flex; gap:10px; margin-top:25px;">
-        <button id="btn-close-settings" style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; cursor:pointer; font-family:inherit;">CANCELAR</button>
-        <button id="btn-save-settings" style="flex:1; background:#a30000; border:none; color:#fff; padding:10px; cursor:pointer; font-family:inherit; font-weight:bold;">APLICAR</button>
+        <button id="btn-close-settings" class="gp-focusable" style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; padding:10px; cursor:pointer; font-family:inherit;">CANCELAR</button>
+        <button id="btn-save-settings" class="gp-focusable" style="flex:1; background:#a30000; border:none; color:#fff; padding:10px; cursor:pointer; font-family:inherit; font-weight:bold;">APLICAR</button>
       </div>
     </div>
   </div>
+
+  <!-- Modal de Pausa Cyberpunk -->
+  <div id="pause-modal" style="display:none; position:fixed; inset:0; z-index:195; background:radial-gradient(circle at center, rgba(30,10,10,0.88) 0%, rgba(10,5,10,0.96) 100%); align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(8px);">
+    <div style="background:rgba(12,10,18,0.96); border:1px solid rgba(163,0,0,0.6); padding:32px 28px; border-radius:6px; width:360px; max-width:92vw; box-shadow:0 0 35px rgba(163,0,0,0.4), inset 0 0 15px rgba(163,0,0,0.1); text-align:center;">
+      <h2 style="color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:2.4rem; letter-spacing:4px; margin-bottom:6px; text-transform:uppercase;">
+        <i class="fa-solid fa-pause" style="color:#ff3333; margin-right:8px;"></i>PAUSA
+      </h2>
+      <p id="pause-subtext" style="color:rgba(255,255,255,0.4); font-size:0.7rem; letter-spacing:0.18em; margin-bottom:24px;">CARRERA EN CURSO</p>
+
+      <div style="display:flex; flex-direction:column; gap:16px;">
+        <button id="btn-pause-resume" class="mm-btn gp-focusable" style="font-size:1.15rem; padding:14px 20px;"><i class="fa-solid fa-play"></i> CONTINUAR</button>
+        <button id="btn-pause-restart" class="mm-btn gp-focusable" style="font-size:1.15rem; padding:14px 20px;"><i class="fa-solid fa-rotate-right"></i> REINICIAR CARRERA</button>
+        <button id="btn-pause-settings" class="mm-btn gp-focusable" style="font-size:1.15rem; padding:14px 20px;"><i class="fa-solid fa-gear"></i> AJUSTES</button>
+        <button id="btn-pause-exit" class="mm-btn gp-focusable" style="font-size:1.15rem; padding:14px 20px;"><i class="fa-solid fa-arrow-left"></i> SALIR AL MENÚ</button>
+      </div>
+
+      <div style="margin-top:22px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.1); font-size:0.65rem; color:rgba(255,255,255,0.5); letter-spacing:0.08em; line-height:1.8;">
+        <span style="color:#ff6666;">[D-PAD / STICK]</span> NAVEGAR &nbsp;|&nbsp; <span style="color:#00ff66;">[A]</span> SELECCIONAR<br>
+        <span style="color:#00d4ff;">[B / START]</span> CONTINUAR &nbsp;|&nbsp; <span style="color:#ffd700;">[SELECT]</span> REINICIO RÁPIDO
+      </div>
+    </div>
+  </div>
+
+  <!-- Contenedor de Toasts de Joystick Plug-and-Play -->
+  <div id="gp-toast-container" style="position:fixed; top:20px; right:20px; z-index:300; pointer-events:none; display:flex; flex-direction:column; gap:8px;"></div>
 
   <!-- Modal de Registro Rápido -->
   <div id="quick-register-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.85); align-items:center; justify-content:center; backdrop-filter:blur(5px); flex-direction:column;">
@@ -1204,13 +1240,13 @@
       </div>
 
       <div class="fs-actions">
-        <button class="fs-btn fs-btn-rematch" id="fs-btn-rematch">
+        <button class="fs-btn fs-btn-rematch gp-focusable" id="fs-btn-rematch">
           <i class="fa-solid fa-rotate-right"></i> <span id="fs-rematch-btn-text">LISTO PARA LA SIGUIENTE CARRERA</span>
         </button>
-        <button class="fs-btn fs-btn-ghost" id="fs-btn-menu" onclick="if(window.SpiderKart&&window.SpiderKart.returnToMenu){window.SpiderKart.returnToMenu();}else{location.href='/game.html';}">
+        <button class="fs-btn fs-btn-ghost gp-focusable" id="fs-btn-menu" onclick="if(window.SpiderKart&&window.SpiderKart.returnToMenu){window.SpiderKart.returnToMenu();}else{location.href='/game.html';}">
           <i class="fa-solid fa-bars"></i> MENÚ PRINCIPAL
         </button>
-        <a href="/" class="fs-btn fs-btn-ghost">
+        <a href="/" class="fs-btn fs-btn-ghost gp-focusable">
           <i class="fa-solid fa-house"></i> PORTAL
         </a>
       </div>
