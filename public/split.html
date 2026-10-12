@@ -113,6 +113,15 @@ let iframes = [];
 let splitRoom = '';
 let baseName = 'Local';
 
+const KART_PALETTE = [
+  '#e6194b', // P1: Crimson / Rojo Neón
+  '#00d4ff', // P2: Cyan / Azul Neón
+  '#ffe119', // P3: Amarillo Eléctrico / Oro
+  '#00ff66', // P4: Verde Neón / Esmeralda
+  '#f58231', // P5: Naranja Radiante
+  '#9900ff'  // P6: Púrpura / Violeta
+];
+
 // gpAssignment: gpIndex → playerIndex (0-based)
 const gpAssignment = {};
 
@@ -289,8 +298,9 @@ function startSplit(n) {
     cell.className = 'cell';
     const fr = document.createElement('iframe');
     const pName = encodeURIComponent(`${baseName} (${i+1})`);
+    const pCol = KART_PALETTE[i % KART_PALETTE.length];
     // splitMode=1 → iframe espera sk-connect-now del padre para unirse simultáneamente
-    fr.src = `/game.html?autoJoin=${encodeURIComponent(splitRoom)}&playerName=${pName}&hideMenu=1&splitMode=1&splitPlayers=${n}&playerIdx=${i}&audioMute=${i > 0 ? 1 : 0}`;
+    fr.src = `/game.html?autoJoin=${encodeURIComponent(splitRoom)}&playerName=${pName}&hideMenu=1&splitMode=1&splitPlayers=${n}&playerIdx=${i}&kartColor=${encodeURIComponent(pCol)}&audioMute=${i > 0 ? 1 : 0}`;
     fr.setAttribute('allow', 'fullscreen');
 
     fr.addEventListener('load', () => {
@@ -309,6 +319,9 @@ function startSplit(n) {
     const lbl = document.createElement('div');
     lbl.className = 'plabel';
     lbl.textContent = `P${i+1} · ${decodeURIComponent(pName)}`;
+    lbl.style.background = pCol;
+    lbl.style.boxShadow = `0 0 10px ${pCol}`;
+    lbl.style.fontWeight = 'bold';
     cell.appendChild(fr);
     cell.appendChild(lbl);
     grid.appendChild(cell);

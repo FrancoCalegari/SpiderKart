@@ -603,6 +603,14 @@ const rooms = {
 }; // roomName -> { phase, laps, players: [{ws, id, name, ready, color, timeMs}], isSystemRoom }
 const playersGlobal = {}; // id -> { ws, room, id, name }
 const MIN_PLAYERS = 2;
+const KART_PALETTE = [
+    '#e6194b', // P1: Crimson / Rojo Neón
+    '#00d4ff', // P2: Cyan / Azul Neón
+    '#ffe119', // P3: Amarillo Eléctrico / Oro
+    '#00ff66', // P4: Verde Neón / Esmeralda
+    '#f58231', // P5: Naranja Radiante
+    '#9900ff'  // P6: Púrpura / Violeta
+];
 
 function getRoom(roomName) {
     if (!rooms[roomName]) {
@@ -636,6 +644,24 @@ function handleLeave(socket) {
         
         if (room.players.length === 0 && !room.isSystemRoom) {
             delete rooms[roomName];
+        } else if (room.phase === 'racing') {
+            // Si un jugador se va durante la carrera, chequear si los restantes ya terminaron
+            checkRaceFinish(roomName);
+        } else if (room.phase === 'finished') {
+            // Actualizar estado de revancha con los jugadores restantes
+            const readyPlayers = room.players.filter(p => p.rematchReady);
+            const isSplitRoom = roomName.startsWith('SPLIT_');
+            const minReq = isSplitRoom ? (room.expectedSplit || 2) : 1;
+            broadcastToRoom(roomName, {
+                type: 'rematch_status',
+                readyCount: readyPlayers.length,
+                totalCount: room.players.length,
+                readyIds: readyPlayers.map(p => p.id)
+            });
+            if (readyPlayers.length >= room.players.length && room.players.length >= minReq) {
+                room.players.forEach(p => { p.timeMs = 0; p.rematchReady = false; });
+                startCountdown(roomName);
+            }
         } else if (room.players.length < MIN_PLAYERS && room.phase !== 'racing' && room.phase !== 'finished') {
             room.phase = 'waiting';
             if (room.countdownInterval) clearInterval(room.countdownInterval);
@@ -660,12 +686,16 @@ function startCountdown(roomName) {
         room.phase = 'countdown';
         room.countdown = 3;
         
-        room.players.forEach((p, idx) => { p.startPosition = idx; });
+        room.players.forEach((p, idx) => { 
+            p.startPosition = idx;
+            p.timeMs = 0;
+            p.rematchReady = false;
+        });
         
         broadcastToRoom(roomName, { 
             type: 'countdown', 
             seconds: room.countdown,
-            players: room.players.map(p => ({ id: p.id, startPosition: p.startPosition }))
+            players: room.players.map(p => ({ id: p.id, startPosition: p.startPosition, color: p.color }))
         });
         
         room.countdownInterval = setInterval(() => {
@@ -682,7 +712,7 @@ function startCountdown(roomName) {
                     room.phase = 'waiting';
                 }
             }
-        }, 1000);
+        } , 1000);
     }
 
     if (isSplit) {
@@ -714,53 +744,32 @@ function checkRaceFinish(roomName) {
     const finished = room.players.filter(p => p.timeMs > 0);
     const pending  = room.players.filter(p => p.timeMs <= 0);
 
-    // La carrera termina cuando:
-    //  a) Todos completaron, O
-    //  b) Solo queda 1 jugador sin terminar (el último — se le da tiempo extra o se le fuerza)
-    const shouldEnd = pending.length === 0 || (finished.length > 0 && pending.length === 1);
-    if (!shouldEnd) return;
+    // Notificar avance de llegadas a toda la sala
+    broadcastToRoom(roomName, {
+        type: 'finish_progress',
+        finishedCount: finished.length,
+        totalCount: room.players.length,
+        pendingCount: pending.length,
+        finishedPlayers: finished.map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs, color: p.color }))
+    });
 
-    // Si queda 1 pendiente, darle 60 s adicionales antes de forzar fin
-    if (pending.length === 1 && !room.lastPlayerTimer) {
-        broadcastToRoom(roomName, {
-            type: 'last_player',
-            id: pending[0].id,
-            name: pending[0].name
-        });
-        room.lastPlayerTimer = setTimeout(() => {
-            // Tiempo expiró: asignar tiempo máximo al jugador pendiente
-            const lastPlayer = room.players.find(p => p.timeMs <= 0);
-            if (lastPlayer) lastPlayer.timeMs = 99 * 60 * 1000; // 99 min DNF
-            room.lastPlayerTimer = null;
-            checkRaceFinish(roomName);
-        }, 60000);
+    // En multijugador se debe de esperar a que TODOS los pilotos crucen la línea de meta de su última vuelta
+    if (pending.length > 0) {
+        // Aún hay pilotos pendientes en pista
         return;
     }
 
-    // Cancelar timer del último jugador si todos terminaron
-    if (room.lastPlayerTimer) {
-        clearTimeout(room.lastPlayerTimer);
-        room.lastPlayerTimer = null;
-    }
-
+    // Todos los pilotos terminaron su última vuelta!
     room.phase = 'finished';
     const results = room.players
-        .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs }))
+        .map(p => ({ id: p.id, name: p.name, timeMs: p.timeMs, color: p.color }))
         .sort((a, b) => a.timeMs - b.timeMs)
         .map((r, idx) => ({ ...r, position: idx + 1 }));
 
-    broadcastToRoom(roomName, { type: 'race_results', results, saved: false });
+    // Resetear banderas de revancha
+    room.players.forEach(p => { p.rematchReady = false; });
 
-    setTimeout(() => {
-        if (!rooms[roomName]) return;
-        room.players.forEach(p => p.timeMs = 0);
-        room.phase = 'waiting';
-        if (room.players.length >= MIN_PLAYERS) {
-            startCountdown(roomName);
-        } else {
-            broadcastToRoom(roomName, { type: 'waiting', count: room.players.length, min: MIN_PLAYERS });
-        }
-    }, 10000);
+    broadcastToRoom(roomName, { type: 'race_results', results, saved: false, laps: room.laps });
 }
 
 io.on('connection', (socket) => {
@@ -773,10 +782,18 @@ io.on('connection', (socket) => {
                 case 'join': {
                     if (!roomName || !name) return;
                     const id = pilotId || 'pilot_' + Math.random().toString(36).substr(2, 9);
-                    const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
-                    
                     const room = getRoom(roomName);
                     const isSplitRoom = roomName.startsWith('SPLIT_');
+
+                    let color = data.color;
+                    if (!color) {
+                        if (typeof data.playerIdx === 'number') {
+                            color = KART_PALETTE[data.playerIdx % KART_PALETTE.length];
+                        } else {
+                            const usedColors = new Set(room.players.map(p => p.color));
+                            color = KART_PALETTE.find(c => !usedColors.has(c)) || KART_PALETTE[room.players.length % KART_PALETTE.length];
+                        }
+                    }
 
                     if (room.phase === 'racing') {
                         socket.emit('message', { type: 'error', message: 'La carrera ya empezó' });
@@ -878,6 +895,41 @@ io.on('connection', (socket) => {
                         powerupIdx: data.powerupIdx,
                         consumedBy: playerGlobal.id
                     }, socket); // excluir al que lo consumió (ya lo procesó localmente)
+                    break;
+                }
+
+                case 'rematch_ready': {
+                    const playerGlobal = Object.values(playersGlobal).find(p => p.ws === socket);
+                    if (!playerGlobal) return;
+                    const room = rooms[playerGlobal.room];
+                    if (!room || room.phase !== 'finished') return;
+
+                    const player = room.players.find(p => p.id === playerGlobal.id);
+                    if (player) {
+                        player.rematchReady = (data.ready !== false);
+                    }
+
+                    const readyPlayers = room.players.filter(p => p.rematchReady);
+                    const readyCount = readyPlayers.length;
+                    const totalCount = room.players.length;
+
+                    broadcastToRoom(playerGlobal.room, {
+                        type: 'rematch_status',
+                        readyCount,
+                        totalCount,
+                        readyIds: readyPlayers.map(p => p.id)
+                    });
+
+                    // Si todos los pilotos están listos para la siguiente carrera
+                    const isSplit = playerGlobal.room.startsWith('SPLIT_');
+                    const minReq = isSplit ? (room.expectedSplit || 2) : 1;
+                    if (readyCount >= totalCount && totalCount >= minReq) {
+                        room.players.forEach(p => {
+                            p.timeMs = 0;
+                            p.rematchReady = false;
+                        });
+                        startCountdown(playerGlobal.room);
+                    }
                     break;
                 }
 

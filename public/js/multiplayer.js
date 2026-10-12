@@ -128,6 +128,8 @@
   const hideMenuForce = urlParamsMulti.get('hideMenu') === '1';
   const isSplitModeMulti = urlParamsMulti.get('splitMode') === '1';
   const splitPlayersParam = parseInt(urlParamsMulti.get('splitPlayers') || '2', 10);
+  const playerIdxParam = urlParamsMulti.has('playerIdx') ? parseInt(urlParamsMulti.get('playerIdx'), 10) : null;
+  const kartColorParam = urlParamsMulti.get('kartColor') || null;
 
   // En modo split ignoramos la sesión guardada para que cada iframe reciba
   // un pilotId único, evitando que el servidor los expulse por "reconexión".
@@ -386,7 +388,10 @@
       retries = 0;
       setStatus('CONECTADO — SALA ' + room, true);
       const joinPayload = {
-        type: 'join', room, name, pilotId: session ? session.pilotId : null
+        type: 'join', room, name,
+        pilotId: session ? session.pilotId : null,
+        playerIdx: playerIdxParam,
+        color: kartColorParam
       };
       if (isSplitModeMulti) {
         joinPayload.splitPlayers = splitPlayersParam;
@@ -398,7 +403,8 @@
         if (!window.SpiderKart || !ws || !ws.connected) return;
         if (race.phase !== 'racing') return; // no spamear estado fuera de carrera
         const localState = window.SpiderKart.getLocalState();
-        ws.emit('message', Object.assign({ type: 'state' }, localState));
+        const myColor = players[playerId]?.color || kartColorParam;
+        ws.emit('message', Object.assign({ type: 'state', color: myColor }, localState));
         checkLocalFinish(localState);
       }, 1000 / STATE_HZ);
     });
@@ -468,13 +474,16 @@
     if ((localState.lap || 0) < race.laps) return;
 
     race.finished = true;
-    race.phase = 'finished';
     const timeMs = Math.round(performance.now() - race.startedAt);
 
     if (ws && ws.connected) {
       ws.emit('message', { type: 'finish', timeMs, lap: localState.lap });
-      setRaceStatus('¡Carrera terminada! Esperando resultados de la sala…');
+      setRaceStatus('¡Cruzaste la meta! Esperando a que todos los pilotos terminen la carrera…');
+      if (window.SpiderKart && window.SpiderKart.showWaitingAllFinishedHUD) {
+        window.SpiderKart.showWaitingAllFinishedHUD(1, Object.keys(players).length + 1);
+      }
     } else {
+      race.phase = 'finished';
       if (lapPollInterval) { clearInterval(lapPollInterval); lapPollInterval = null; }
       const timeStr = (timeMs / 1000).toFixed(2) + 's';
       
@@ -506,7 +515,15 @@
         }
         (msg.players || []).forEach(p => {
           players[p.id] = { name: p.name, color: p.color, ready: !!p.ready };
+          if (window.SpiderKart && window.SpiderKart.updateRemoteKartColor && p.id !== playerId && p.color) {
+            window.SpiderKart.updateRemoteKartColor(p.id, p.color);
+          }
         });
+        const myData = players[playerId] || (msg.players || []).find(p => p.id === playerId);
+        const myAssignedColor = myData?.color || msg.color || kartColorParam;
+        if (myAssignedColor && window.SpiderKart && window.SpiderKart.setLocalKartColor) {
+          window.SpiderKart.setLocalKartColor(myAssignedColor);
+        }
         renderPlayers();
         race.phase = Object.keys(players).length >= MIN_PLAYERS ? 'lobby' : 'waiting';
         setRaceStatus(race.phase === 'waiting'
@@ -516,6 +533,9 @@
 
       case 'player_joined':
         players[msg.id] = { name: msg.name, color: msg.color, ready: false };
+        if (window.SpiderKart && window.SpiderKart.updateRemoteKartColor && msg.color) {
+          window.SpiderKart.updateRemoteKartColor(msg.id, msg.color);
+        }
         renderPlayers();
         if (race.phase === 'waiting' && Object.keys(players).length >= MIN_PLAYERS) {
           race.phase = 'lobby';
@@ -555,10 +575,24 @@
           lsScreenCd.style.display = 'none';
         }
         if (window.SpiderKart) {
+          if (window.SpiderKart.hideFinishScreen) {
+            window.SpiderKart.hideFinishScreen();
+          }
+          if (window.SpiderKart.resumeRendering) {
+            window.SpiderKart.resumeRendering();
+          }
           if (window.SpiderKart.cancelLocalCountdown) {
             window.SpiderKart.cancelLocalCountdown();
           }
           if (msg.players) {
+            msg.players.forEach(p => {
+              if (players[p.id]) players[p.id].color = p.color || players[p.id].color;
+              if (p.id === playerId && p.color && window.SpiderKart.setLocalKartColor) {
+                window.SpiderKart.setLocalKartColor(p.color);
+              } else if (p.id !== playerId && p.color && window.SpiderKart.updateRemoteKartColor) {
+                window.SpiderKart.updateRemoteKartColor(p.id, p.color);
+              }
+            });
             const me = msg.players.find(p => p.id === playerId);
             const myPos = me ? (me.startPosition || 0) : 0;
             window.SpiderKart.lockAndReset(myPos);
@@ -575,23 +609,43 @@
         race.startedAt = performance.now();
         race.finished = false;
         if (window.SpiderKart) {
+          if (window.SpiderKart.hideFinishScreen) window.SpiderKart.hideFinishScreen();
+          if (window.SpiderKart.resumeRendering) window.SpiderKart.resumeRendering();
           if (window.SpiderKart.setCountdown) window.SpiderKart.setCountdown(0);
           else window.SpiderKart.unlock();
           
           if (window.SpiderKart.resetRace) {
-            // El resetRace() de SpiderKart ya no debería bloquear si le pasamos false
-            // O directamente no lo llamamos, porque lockAndReset() ya preparó todo
-            // Vamos a solo reiniciar tiempos locales
             window.SpiderKart.resetRace(false);
           }
-          window.SpiderKart.unlock(); // Asegurar desbloqueo
+          window.SpiderKart.unlock();
         }
         setRaceStatus('¡EN CARRERA! ' + race.laps + ' vueltas.');
+        break;
+
+      case 'finish_progress':
+        if (window.SpiderKart && window.SpiderKart.updateFinishProgress) {
+          window.SpiderKart.updateFinishProgress(msg.finishedCount, msg.totalCount);
+        }
+        setRaceStatus(`Esperando a todos los pilotos... (${msg.finishedCount}/${msg.totalCount} en meta)`);
+        break;
+
+      case 'rematch_status':
+        if (window.SpiderKart && window.SpiderKart.updateRematchStatus) {
+          window.SpiderKart.updateRematchStatus(msg.readyCount, msg.totalCount, msg.readyIds);
+        }
         break;
 
       case 'race_results':
         race.phase = 'finished';
         renderResults(msg.results, msg.saved);
+        
+        // Detener renderizado de la pista y mostrar la pantalla de clasificación completa
+        if (window.SpiderKart) {
+          if (window.SpiderKart.stopRendering) window.SpiderKart.stopRendering();
+          if (window.SpiderKart.showClassificationScreen) {
+            window.SpiderKart.showClassificationScreen(msg.results, msg.laps || race.laps);
+          }
+        }
         
         // INTEGRACIÓN TORNEO UNDERCODE: Registrar victoria si somos 1ros
         const myUserId = localStorage.getItem('spiderkart_userId');
@@ -713,6 +767,18 @@
     getSession,
     minPlayers: MIN_PLAYERS,
     defaultLaps: DEFAULT_LAPS,
+    getPlayerId: () => playerId,
+    isConnected: () => !!(ws && ws.connected),
+    sendRematchReady: (ready = true) => {
+      if (ws && ws.connected) {
+        ws.emit('message', { type: 'rematch_ready', ready });
+      }
+    },
+    onLocalLapFinished: (lap, totalTimeMs) => {
+      if (race.phase === 'racing' && !race.finished && lap >= race.laps) {
+        checkLocalFinish({ lap });
+      }
+    },
     sendHit: (targetId) => {
       // Usar ws.emit (Socket.io) en lugar de ws.send (nativo WebSocket)
       if (ws && ws.connected) {

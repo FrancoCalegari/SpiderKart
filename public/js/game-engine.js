@@ -1299,6 +1299,15 @@
   const kartGroup = new THREE.Group();
   kartGroup.rotation.order = 'YXZ';
 
+  const KART_PALETTE = [
+    '#e6194b', // P1: Crimson / Rojo Neón
+    '#00d4ff', // P2: Cyan / Azul Neón
+    '#ffe119', // P3: Amarillo Eléctrico / Oro
+    '#00ff66', // P4: Verde Neón / Esmeralda
+    '#f58231', // P5: Naranja Radiante
+    '#9900ff'  // P6: Púrpura / Violeta
+  ];
+
   const bodyMat = new THREE.MeshStandardMaterial({
     color: 0xa30000, roughness: 0.3, metalness: 0.7,
     emissive: 0x3a0000, emissiveIntensity: 0.4
@@ -1350,6 +1359,16 @@
   kartLight.position.set(0, 1, 0);
   kartGroup.add(kartLight);
 
+  function setLocalKartColor(colorHex) {
+    if (!colorHex) return;
+    try {
+      const c = new THREE.Color(colorHex);
+      bodyMat.color.copy(c);
+      bodyMat.emissive.copy(c).multiplyScalar(0.25);
+      kartLight.color.copy(c);
+    } catch (_) {}
+  }
+
   const startSample = trackSamples[0];
   const startAngle0 = Math.atan2(startSample.tan.z, startSample.tan.x);
   kartGroup.position.set(startSample.x, 0.0, startSample.z);
@@ -1381,10 +1400,11 @@
   function createGhostKart(color, name) {
     const group = new THREE.Group();
     group.rotation.order = 'YXZ';
+    const c = new THREE.Color(color);
     const ghostBodyMat = new THREE.MeshStandardMaterial({
-      color, roughness: 0.35, metalness: 0.6,
-      emissive: color, emissiveIntensity: 0.35,
-      transparent: true, opacity: 0.9
+      color: c, roughness: 0.35, metalness: 0.6,
+      emissive: c, emissiveIntensity: 0.35,
+      transparent: true, opacity: 0.95
     });
     const ghostCockpitMat = new THREE.MeshStandardMaterial({
       color: 0x111111, roughness: 0.5, metalness: 0.9,
@@ -1392,16 +1412,34 @@
     });
     const gBody = new THREE.Mesh(bodyGeo, ghostBodyMat);
     gBody.position.y = 0.5;
+    gBody.userData.isBody = true;
     group.add(gBody);
     const gCockpit = new THREE.Mesh(cockpitGeo, ghostCockpitMat);
     gCockpit.position.set(0, 0.95, -0.2);
     group.add(gCockpit);
     attachWheels(group);
     group.add(makeNameSprite(name));
-    const light = new THREE.PointLight(color, 1.4, 6);
+    const light = new THREE.PointLight(c, 1.4, 6);
     light.position.set(0, 1, 0);
     group.add(light);
     return group;
+  }
+
+  function updateRemoteKartColor(id, colorHex) {
+    const entry = remoteKarts[id];
+    if (!entry || !entry.group || !colorHex) return;
+    try {
+      const c = new THREE.Color(colorHex);
+      entry.group.traverse(child => {
+        if (child.isMesh && child.userData && child.userData.isBody && child.material) {
+          child.material.color.copy(c);
+          child.material.emissive.copy(c).multiplyScalar(0.35);
+        } else if (child.isPointLight) {
+          child.color.copy(c);
+        }
+      });
+      entry.color = colorHex;
+    } catch (_) {}
   }
 
   function shortestAngleDiff(a, b) {
@@ -1412,12 +1450,18 @@
   }
 
   function ensureRemoteKart(id, meta) {
-    if (remoteKarts[id]) return remoteKarts[id];
     meta = meta || {};
-    const group = createGhostKart(meta.color || 0x2299ff, meta.name || 'PILOTO');
+    const colorVal = meta.color || 0x2299ff;
+    if (remoteKarts[id]) {
+      if (meta.color && remoteKarts[id].color !== meta.color) {
+        updateRemoteKartColor(id, meta.color);
+      }
+      return remoteKarts[id];
+    }
+    const group = createGhostKart(colorVal, meta.name || 'PILOTO');
     scene.add(group);
     const entry = {
-      group, pos: group.position.clone(), angle: 0,
+      group, color: colorVal, pos: group.position.clone(), angle: 0,
       targetPos: group.position.clone(), targetAngle: 0, lastSeen: performance.now()
     };
     remoteKarts[id] = entry;
@@ -1750,6 +1794,16 @@
   const isKeyboardOnly = urlParamsEngine.get('keyboard') === '1';
   const isSplitMode    = urlParamsEngine.get('splitMode') === '1';
 
+  // Sincronización inicial del color del kart
+  const initialKartColor = urlParamsEngine.get('kartColor');
+  if (initialKartColor) {
+    setLocalKartColor(initialKartColor);
+  } else if (urlParamsEngine.has('playerIdx')) {
+    const KART_PALETTE_LOCAL = ['#e6194b', '#00d4ff', '#ffe119', '#00ff66', '#f58231', '#9900ff'];
+    const pIdx = parseInt(urlParamsEngine.get('playerIdx'), 10) || 0;
+    setLocalKartColor(KART_PALETTE_LOCAL[pIdx % KART_PALETTE_LOCAL.length]);
+  }
+
   // Si está en modo split, activar clase para adaptar el HUD y ocultar elementos innecesarios
   if (isSplitMode) {
     document.body.classList.add('is-split-mode');
@@ -1888,6 +1942,8 @@
       const now = performance.now();
       const lapTime = now - state.lapStartTime;
       state.lapStartTime = now;
+      state.lapTimes = state.lapTimes || [];
+      state.lapTimes.push(lapTime);
 
       if (state.bestLap < 0 || lapTime < state.bestLap) {
         state.bestLap = lapTime;
@@ -1912,7 +1968,34 @@
       if (state.lap >= TOTAL_LAPS && !state.raceFinished) {
         state.raceFinished = true;
         state.raceEndTime = now;
-        showFinishScreen();
+        
+        // Si estamos en multijugador online, NO cerramos inmediatamente con showClassificationScreen()
+        // sino que informamos a multiplayer.js para esperar a que TODOS los pilotos crucen la meta.
+        if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.isConnected && window.SpiderKartMultiplayer.isConnected()) {
+          state.raceFinishedWaiting = true;
+          showWaitingAllFinishedHUD(1, null);
+          if (window.SpiderKartMultiplayer.onLocalLapFinished) {
+            window.SpiderKartMultiplayer.onLocalLapFinished(state.lap, state.raceEndTime - state.raceStartTime);
+          }
+        } else {
+          // Modo local / split / solo: detener renderizado y mostrar clasificación
+          stopRendering();
+          const localTotal = state.raceEndTime - state.raceStartTime;
+          let pilotName = 'PILOTO';
+          try {
+            const s = JSON.parse(localStorage.getItem('sk_session'));
+            if (s?.name) pilotName = s.name;
+          } catch(_) {}
+          if (urlParamsEngine.has('playerName')) pilotName = decodeURIComponent(urlParamsEngine.get('playerName'));
+
+          showClassificationScreen([{
+            id: 'local',
+            name: pilotName,
+            timeMs: localTotal,
+            color: '#' + bodyMat.color.getHexString(),
+            position: 1
+          }], TOTAL_LAPS);
+        }
       }
     } else {
       state.checkpointsPassed++;
@@ -1932,36 +2015,253 @@
     return `${m}:${String(s).padStart(2,'0')}.${String(mil).padStart(3,'0')}`;
   }
 
-  function showFinishScreen() {
+  function showWaitingAllFinishedHUD(finishedCount = 1, totalCount = null) {
+    const el = document.getElementById('hud-finish-waiting');
+    if (!el) return;
+    el.classList.remove('hidden');
+    const cntEl = document.getElementById('hfw-counter');
+    if (cntEl) {
+      if (totalCount !== null && totalCount > 0) {
+        cntEl.textContent = `PILOTOS EN META: ${finishedCount} / ${totalCount}`;
+      } else {
+        cntEl.textContent = 'ESPERANDO A LOS DEMÁS PILOTOS...';
+      }
+    }
+  }
+
+  function hideWaitingAllFinishedHUD() {
+    const el = document.getElementById('hud-finish-waiting');
+    if (el) el.classList.add('hidden');
+  }
+
+  function hideFinishScreen() {
+    const finishEl = document.getElementById('finish-screen');
+    if (finishEl) finishEl.classList.remove('active');
+    hideWaitingAllFinishedHUD();
+  }
+
+  function showClassificationScreen(results = [], totalLaps = TOTAL_LAPS) {
+    hideWaitingAllFinishedHUD();
+    stopRendering(); // Detener el renderizado 3D de la pista
+
     const finishEl = document.getElementById('finish-screen');
     if (!finishEl) return;
-    const totalTime = state.raceEndTime - state.raceStartTime;
+
+    // Calcular tiempos del jugador local
+    const totalTime = (state.raceEndTime > 0 ? state.raceEndTime : performance.now()) - state.raceStartTime;
     const fsTotal = document.getElementById('fs-total-time');
     const fsBest  = document.getElementById('fs-best-time');
+    const fsLaps  = document.getElementById('fs-laps-count');
     if (fsTotal) fsTotal.textContent = formatTime(totalTime);
     if (fsBest)  fsBest.textContent  = formatTime(state.bestLap);
+    if (fsLaps)  fsLaps.textContent  = `${Math.min(state.lap, totalLaps)} / ${totalLaps}`;
+
+    // Obtener nombre del piloto
+    let pilotName = 'PILOTO';
+    try {
+      const s = JSON.parse(localStorage.getItem('sk_session'));
+      if (s?.name) pilotName = s.name;
+    } catch (_) {}
+    if (urlParamsEngine.has('playerName')) pilotName = decodeURIComponent(urlParamsEngine.get('playerName'));
+
+    const pilotNameEl = document.getElementById('fs-pilot-name');
+    if (pilotNameEl) pilotNameEl.textContent = pilotName.toUpperCase();
+
+    // Color del kart local
+    const myHexColor = '#' + bodyMat.color.getHexString();
+    const colorDot = document.getElementById('fs-pilot-color-dot');
+    const pilotAvatar = document.getElementById('fs-pilot-avatar');
+    if (colorDot) colorDot.style.background = myHexColor;
+    if (pilotAvatar) {
+      pilotAvatar.style.borderColor = myHexColor;
+      pilotAvatar.style.boxShadow = `0 0 16px ${myHexColor}`;
+    }
+
+    // Identificar posición del jugador local en la clasificación
+    let myPos = 1;
+    if (results && results.length > 0) {
+      const myId = window.SpiderKartMultiplayer?.getPlayerId?.();
+      const foundIdx = results.findIndex(r => (myId && r.id === myId) || r.id === 'local' || r.name === pilotName);
+      if (foundIdx !== -1) {
+        myPos = results[foundIdx].position || (foundIdx + 1);
+      }
+    }
+
+    const placeBadge = document.getElementById('fs-place-badge');
+    const mainTitle = document.getElementById('fs-main-title');
+    const titleAccent = document.getElementById('fs-title-accent');
+    if (placeBadge) {
+      placeBadge.textContent = `${myPos}°`;
+      if (myPos === 1) {
+        placeBadge.style.background = 'linear-gradient(135deg, #ffd700, #ff8800)';
+        placeBadge.style.boxShadow = '0 0 25px rgba(255,215,0,0.6)';
+        if (titleAccent) titleAccent.textContent = 'VICTORIA';
+      } else if (myPos === 2) {
+        placeBadge.style.background = 'linear-gradient(135deg, #e0e0e0, #888888)';
+        placeBadge.style.boxShadow = '0 0 20px rgba(220,220,220,0.5)';
+        if (titleAccent) titleAccent.textContent = 'PODIO';
+      } else if (myPos === 3) {
+        placeBadge.style.background = 'linear-gradient(135deg, #cd7f32, #8b4513)';
+        placeBadge.style.boxShadow = '0 0 20px rgba(205,127,50,0.5)';
+        if (titleAccent) titleAccent.textContent = 'PODIO';
+      } else {
+        placeBadge.style.background = 'linear-gradient(135deg, #555555, #222222)';
+        placeBadge.style.boxShadow = 'none';
+        placeBadge.style.color = '#fff';
+        if (titleAccent) titleAccent.textContent = 'META';
+      }
+    }
+
+    // ANIMACIÓN DE PROGRESO DEL PILOTO (XP Y NIVEL)
+    const xpGainEl = document.getElementById('fs-xp-gain');
+    const xpBar = document.getElementById('fs-xp-bar');
+    const levelNum = document.getElementById('fs-level-num');
+    
+    let baseXp = 200;
+    let posBonus = Math.max(50, 300 - (myPos - 1) * 60);
+    let lapBonus = state.bestLap > 0 ? 50 : 0;
+    let totalXpEarned = baseXp + posBonus + lapBonus;
+
+    let currentXp = parseInt(localStorage.getItem('spiderkart_xp') || '150', 10);
+    let xpInLevelBefore = currentXp % 500;
+    let newXp = currentXp + totalXpEarned;
+    let newLevel = Math.floor(newXp / 500) + 1;
+    let xpInLevelAfter = newXp % 500;
+    try { localStorage.setItem('spiderkart_xp', String(newXp)); } catch (_) {}
+
+    if (levelNum) levelNum.textContent = String(newLevel);
+    if (xpGainEl) xpGainEl.textContent = `+${totalXpEarned} XP`;
+
+    if (xpBar) {
+      const startPct = Math.min(100, Math.max(8, (xpInLevelBefore / 500) * 100));
+      const endPct = Math.min(100, Math.max(20, (xpInLevelAfter / 500) * 100));
+      xpBar.style.width = startPct + '%';
+      setTimeout(() => {
+        xpBar.style.width = endPct + '%';
+      }, 200);
+    }
+
+    // ANIMACIÓN DE DESGLOSE POR VUELTA
+    const lapBarsContainer = document.getElementById('fs-lap-bars');
+    if (lapBarsContainer) {
+      lapBarsContainer.innerHTML = '';
+      const times = (state.lapTimes && state.lapTimes.length > 0)
+        ? state.lapTimes
+        : [state.bestLap > 0 ? state.bestLap : totalTime];
+      const maxLapTime = Math.max(...times.filter(t => t > 0), 1);
+      const minLapTime = Math.min(...times.filter(t => t > 0), Infinity);
+
+      times.forEach((t, i) => {
+        const row = document.createElement('div');
+        const isBest = (t === minLapTime && times.length > 1);
+        row.className = `fs-lap-row ${isBest ? 'best' : ''}`;
+        const pct = Math.min(100, Math.max(25, (t / maxLapTime) * 100));
+        row.innerHTML = `
+          <span class="fs-lap-idx">VTA ${i + 1}</span>
+          <div class="fs-lap-progress-wrap">
+            <div class="fs-lap-progress-fill" style="width: 0%"></div>
+          </div>
+          <span class="fs-lap-time">${formatTime(t)}</span>
+          ${isBest ? '<span class="fs-lap-badge">RÁPIDA</span>' : ''}
+        `;
+        lapBarsContainer.appendChild(row);
+
+        setTimeout(() => {
+          const fill = row.querySelector('.fs-lap-progress-fill');
+          if (fill) fill.style.width = pct + '%';
+        }, 150 + i * 120);
+      });
+    }
+
+    // TABLA DE CLASIFICACIÓN
+    const tbody = document.getElementById('fs-results-tbody');
+    if (tbody) {
+      tbody.innerHTML = '';
+      const displayResults = (results && results.length > 0) ? results : [{
+        position: 1, name: pilotName, timeMs: totalTime, color: myHexColor, id: 'local'
+      }];
+
+      const bestTimeMs = displayResults[0]?.timeMs || totalTime;
+
+      displayResults.forEach((r, idx) => {
+        const tr = document.createElement('tr');
+        const isMe = (r.id === 'local' || (window.SpiderKartMultiplayer?.getPlayerId?.() && r.id === window.SpiderKartMultiplayer.getPlayerId()) || r.name === pilotName);
+        tr.className = `fs-row ${isMe ? 'me' : ''}`;
+        tr.style.animationDelay = `${idx * 90}ms`;
+
+        const pos = r.position || (idx + 1);
+        const posClass = pos === 1 ? 'fs-pos-1' : (pos === 2 ? 'fs-pos-2' : (pos === 3 ? 'fs-pos-3' : ''));
+        const kartCol = r.color || (isMe ? myHexColor : '#00d4ff');
+        const timeStr = r.timeMs > 0 ? formatTime(r.timeMs) : 'DNF';
+        
+        let diffStr = '--';
+        if (pos === 1) diffStr = 'LÍDER';
+        else if (r.timeMs > 0 && bestTimeMs > 0) {
+          diffStr = `+${((r.timeMs - bestTimeMs) / 1000).toFixed(2)}s`;
+        }
+
+        tr.innerHTML = `
+          <td class="fs-pos-cell ${posClass}">${pos}°</td>
+          <td>
+            <div class="fs-pilot-cell">
+              <span class="fs-color-pip" style="background:${kartCol}; color:${kartCol}"></span>
+              <strong>${(r.name || 'PILOTO').toUpperCase()} ${isMe ? '<span style="color:#00d4ff;font-size:0.75em;">(TÚ)</span>' : ''}</strong>
+            </div>
+          </td>
+          <td style="text-align:right; font-family:'Share Tech Mono', monospace">${timeStr}</td>
+          <td style="text-align:right; font-family:'Share Tech Mono', monospace; color:rgba(255,255,255,0.6)">${diffStr}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Configuración de revancha y siguiente carrera
+    const rematchBtn = document.getElementById('fs-btn-rematch');
+    const rematchInfo = document.getElementById('fs-rematch-info');
+    const rematchBtnText = document.getElementById('fs-rematch-btn-text');
+
+    if (rematchBtn) {
+      rematchBtn.classList.remove('ready');
+      if (rematchBtnText) rematchBtnText.textContent = 'LISTO PARA LA SIGUIENTE CARRERA';
+      rematchBtn.onclick = () => {
+        rematchBtn.classList.add('ready');
+        if (rematchBtnText) rematchBtnText.textContent = '¡LISTO! ESPERANDO A LOS DEMÁS...';
+        
+        if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.isConnected && window.SpiderKartMultiplayer.isConnected()) {
+          window.SpiderKartMultiplayer.sendRematchReady(true);
+        } else {
+          // Modo local: reiniciar carrera alineando horizontalmente en meta
+          setTimeout(() => {
+            hideFinishScreen();
+            resumeRendering();
+            window.SpiderKart.resetRace(0);
+          }, 350);
+        }
+      };
+    }
+
+    if (rematchInfo) {
+      if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.isConnected && window.SpiderKartMultiplayer.isConnected()) {
+        rematchInfo.style.display = 'flex';
+        const txt = document.getElementById('fs-rematch-text');
+        if (txt) txt.textContent = `Esperando a que todos los pilotos estén listos para la siguiente carrera... (0 / ${results.length || 2})`;
+      } else {
+        rematchInfo.style.display = 'none';
+      }
+    }
+
     finishEl.classList.add('active');
 
-    // INTEGRACIÓN TORNEO UNDERCODE: Registrar mejor tiempo
+    // Integración Torneo
     const userId = localStorage.getItem('spiderkart_userId');
     const mapName = window.currentMapName || 'Mapa Principal';
     const finalLapTime = state.bestLap > 0 ? state.bestLap : totalTime;
     if (userId && finalLapTime > 0) {
-        fetch('/api/best-lap', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId, mapName, lapTimeMs: finalLapTime })
-        })
-        .then(res => res.json())
-        .then(data => {
-            console.log('[Torneo] Registro de vuelta:', data);
-            if (data.updated) {
-                // Opcional: mostrar confeti o mensaje de nuevo récord
-                const fsTitle = document.querySelector('#finish-screen h1');
-                if (fsTitle) fsTitle.innerHTML += '<br><span style="color:gold;font-size:0.6em;">¡NUEVO RÉCORD PERSONAL!</span>';
-            }
-        })
-        .catch(err => console.error(err));
+      fetch('/api/best-lap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, mapName, lapTimeMs: finalLapTime })
+      }).catch(err => console.error(err));
     }
   }
 
@@ -2551,24 +2851,65 @@
   function spawnMissile(type) {
     const isHoming = type === 'homing';
     const mesh = new THREE.Mesh(missileGeo, isHoming ? missileMatRed : missileMatGreen);
-    // Posicionar adelante del kart
-    const startX = state.posX + Math.cos(state.angle) * 2;
-    const startZ = state.posZ + Math.sin(state.angle) * 2;
-    mesh.position.set(startX, state.posY + 0.5, startZ);
-    mesh.rotation.y = -state.angle + Math.PI / 2;
+    
+    // Encontrar el índice de muestra de pista más cercano al kart
+    let bestIdx = state.nearestIdx || 0;
+    if (trackSamples && trackSamples.length > 0) {
+      let bestDistSq = Infinity;
+      const searchStart = Math.max(0, (state.nearestIdx || 0) - 25);
+      const searchEnd = Math.min(trackSamples.length, (state.nearestIdx || 0) + 25);
+      for (let i = searchStart; i < searchEnd; i++) {
+        const s = trackSamples[i];
+        const d = (state.posX - s.x) ** 2 + (state.posZ - s.z) ** 2;
+        if (d < bestDistSq) { bestDistSq = d; bestIdx = i; }
+      }
+    }
+    const curSample = (trackSamples && trackSamples[bestIdx]) ? trackSamples[bestIdx] : trackSamples[0];
+    
+    // Desplazamiento lateral inicial respecto al centro de la pista
+    let laneOffset = 0;
+    if (curSample && curSample.normal) {
+      const dx = state.posX - curSample.x;
+      const dz = state.posZ - curSample.z;
+      laneOffset = dx * curSample.normal.x + dz * curSample.normal.z;
+      laneOffset = Math.max(-HALF_WIDTH * 0.75, Math.min(HALF_WIDTH * 0.75, laneOffset));
+    }
+    
+    // Dirección inicial orientada con el avance de la pista
+    const trackAngle = (curSample && curSample.tan)
+      ? Math.atan2(curSample.tan.z, curSample.tan.x)
+      : state.angle;
+
+    const startX = state.posX + Math.cos(state.angle) * 1.8;
+    const startZ = state.posZ + Math.sin(state.angle) * 1.8;
+    const groundY = (typeof getInterpolatedTrackHeight === 'function')
+      ? getInterpolatedTrackHeight(startX, startZ, bestIdx)
+      : (curSample?.y || state.posY);
+    const startY = groundY + 0.55;
+
+    mesh.position.set(startX, startY, startZ);
+    mesh.rotation.y = -trackAngle + Math.PI / 2;
+    if (curSample && curSample.tan) mesh.rotation.x = -curSample.tan.y;
     scene.add(mesh);
     
     activeMissiles.push({
       mesh,
       type,
-      x: startX, y: state.posY + 0.5, z: startZ,
-      angle: state.angle,
-      speed: 2.7, // Rápido para superar karts en turbo
-      life: 5.0 // Segundos antes de desaparecer
+      x: startX,
+      y: startY,
+      z: startZ,
+      sampleIdx: bestIdx,
+      laneOffset: laneOffset,
+      angle: trackAngle,
+      speed: 2.8,
+      life: 6.0
     });
   }
 
   function updateMissiles(dt) {
+    if (!trackSamples || trackSamples.length === 0) return;
+    const totalSamples = trackSamples.length;
+
     for (let i = activeMissiles.length - 1; i >= 0; i--) {
       const m = activeMissiles[i];
       m.life -= dt;
@@ -2578,79 +2919,93 @@
         continue;
       }
 
-      if (m.type === 'homing') {
-        // Buscar el objetivo más cercano por delante (karts remotos u obstáculos activos)
-        let targetX = null;
-        let targetZ = null;
-        let bestDist = Infinity;
+      // 1. Actualizar m.sampleIdx buscando en ventana local hacia adelante en la pista
+      let bestDistSq = Infinity;
+      let newSampleIdx = m.sampleIdx;
+      for (let offset = -4; offset <= 16; offset++) {
+        const testIdx = (m.sampleIdx + offset + totalSamples) % totalSamples;
+        const s = trackSamples[testIdx];
+        const d2 = (m.x - s.x) ** 2 + (m.z - s.z) ** 2;
+        if (d2 < bestDistSq) {
+          bestDistSq = d2;
+          newSampleIdx = testIdx;
+        }
+      }
+      m.sampleIdx = newSampleIdx;
+      const curSample = trackSamples[m.sampleIdx];
 
+      // 2. Determinar punto objetivo a lo largo de la spline de la pista
+      let targetX, targetZ;
+      if (m.type === 'homing') {
+        // Misil teledirigido: sigue el centro de la pista y busca objetivos al frente
+        m.laneOffset += (0 - m.laneOffset) * Math.min(1, dt * 3.0);
+        
+        let targetPos = null;
+        let bestTargetDist = Infinity;
         for (const id in remoteKarts) {
           const rk = remoteKarts[id];
-          const dx = rk.pos.x - m.x;
-          const dz = rk.pos.z - m.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < 45) { // Rango de visión
-            const angleToTarget = Math.atan2(dz, dx);
-            const angleDiff = Math.abs(shortestAngleDiff(m.angle, angleToTarget));
-            if (angleDiff < Math.PI / 3 && dist < bestDist) { // Solo si está más o menos en frente
-              bestDist = dist;
-              targetX = rk.pos.x;
-              targetZ = rk.pos.z;
+          const kdx = rk.pos.x - m.x;
+          const kdz = rk.pos.z - m.z;
+          const dist = Math.sqrt(kdx * kdx + kdz * kdz);
+          if (dist < 50) {
+            const angleToTarget = Math.atan2(kdz, kdx);
+            const diff = Math.abs(shortestAngleDiff(m.angle, angleToTarget));
+            if (diff < Math.PI / 2.2 && dist < bestTargetDist) {
+              bestTargetDist = dist;
+              targetPos = rk.pos;
             }
           }
         }
 
-        for (const obs of obstacles) {
-          if (!obs.active) continue;
-          const dx = obs.x - m.x;
-          const dz = obs.z - m.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < 45) { // Rango de visión
-            const angleToTarget = Math.atan2(dz, dx);
-            const angleDiff = Math.abs(shortestAngleDiff(m.angle, angleToTarget));
-            if (angleDiff < Math.PI / 3 && dist < bestDist) {
-              bestDist = dist;
-              targetX = obs.x;
-              targetZ = obs.z;
-            }
-          }
+        if (targetPos && bestTargetDist < 25) {
+          targetX = targetPos.x;
+          targetZ = targetPos.z;
+        } else {
+          const lookAheadIdx = (m.sampleIdx + 12) % totalSamples;
+          const lookSample = trackSamples[lookAheadIdx];
+          targetX = lookSample.x + lookSample.normal.x * m.laneOffset;
+          targetZ = lookSample.z + lookSample.normal.z * m.laneOffset;
         }
-
-        if (targetX !== null && targetZ !== null) {
-          const dx = targetX - m.x;
-          const dz = targetZ - m.z;
-          const targetAngle = Math.atan2(dz, dx);
-          const diff = shortestAngleDiff(m.angle, targetAngle);
-          m.angle += diff * Math.min(1, dt * 5); // Girar hacia el objetivo
+      } else {
+        // Misil recto: se guía a lo largo de la curvatura de la pista en su carril
+        if (Math.abs(m.laneOffset) > HALF_WIDTH * 0.7) {
+          m.laneOffset *= -0.7; // Rebote suave contra el borde hacia el centro
         }
+        const lookAheadIdx = (m.sampleIdx + 10) % totalSamples;
+        const lookSample = trackSamples[lookAheadIdx];
+        targetX = lookSample.x + lookSample.normal.x * m.laneOffset;
+        targetZ = lookSample.z + lookSample.normal.z * m.laneOffset;
       }
 
+      // 3. Giro hacia el waypoint de la pista
+      const toTargetAngle = Math.atan2(targetZ - m.z, targetX - m.x);
+      const angleDiff = shortestAngleDiff(m.angle, toTargetAngle);
+      const turnSpeed = m.type === 'homing' ? 8.5 : 6.5;
+      m.angle += angleDiff * Math.min(1.0, dt * turnSpeed);
+
+      // 4. Avance
       m.x += Math.cos(m.angle) * m.speed;
       m.z += Math.sin(m.angle) * m.speed;
-      // Adaptar suavemente m.y a la altura de la pista o terreno bajo el misil
-      const terrainY = getTerrainHeightAt(m.x, m.z);
-      let trackGroundY = terrainY;
-      if (trackSamples.length > 0) {
-        let closestY = terrainY;
-        let closestDist = Infinity;
-        for (let sIdx = 0; sIdx < trackSamples.length; sIdx += 8) {
-          const s = trackSamples[sIdx];
-          const d2 = (m.x - s.x)**2 + (m.z - s.z)**2;
-          if (d2 < closestDist) { closestDist = d2; closestY = s.y; }
-        }
-        if (closestDist < 400) trackGroundY = Math.max(closestY, terrainY);
-      }
-      const targetY = trackGroundY + 0.6;
-      m.y = THREE.MathUtils.lerp(m.y, targetY, Math.min(1, dt * 6.0));
+
+      // 5. Altura continua sobre la superficie de la pista
+      const trackGroundY = (typeof getInterpolatedTrackHeight === 'function')
+        ? getInterpolatedTrackHeight(m.x, m.z, m.sampleIdx)
+        : curSample.y;
+      const targetY = trackGroundY + 0.55;
+      m.y = THREE.MathUtils.lerp(m.y, targetY, Math.min(1.0, dt * 10.0));
+
       m.mesh.position.set(m.x, m.y, m.z);
       m.mesh.rotation.y = -m.angle + Math.PI / 2;
+      if (curSample && curSample.tan) {
+        m.mesh.rotation.x = -curSample.tan.y;
+      }
 
-      // Estela de partículas del misil
+      // 6. Estela de partículas
       for (let k = 0; k < 2; k++) {
         spawnParticle(
-          m.x + (Math.random() - 0.5) * 0.3,
-          m.y + (Math.random() - 0.5) * 0.3,
-          m.z + (Math.random() - 0.5) * 0.3,
+          m.x + (Math.random() - 0.5) * 0.25,
+          m.y + (Math.random() - 0.5) * 0.25,
+          m.z + (Math.random() - 0.5) * 0.25,
           (Math.random() - 0.5) * 0.03,
           Math.random() * 0.04,
           (Math.random() - 0.5) * 0.03,
@@ -2660,15 +3015,15 @@
         );
       }
 
-      // Colisión con otros karts
+      // 7. Colisión con otros karts
       let hitSomeone = false;
       for (const id in remoteKarts) {
         const rk = remoteKarts[id];
         const dx = rk.pos.x - m.x;
         const dz = rk.pos.z - m.z;
-        if (dx*dx + dz*dz < 4) { // Radio de colisión 2^2
+        if (dx * dx + dz * dz < 4.8) {
           hitSomeone = true;
-          spawnPickupBurst(m.x, m.y, m.z); // Explosión visual
+          spawnPickupBurst(m.x, m.y, m.z);
           triggerRemoteHit(id);
           if (window.SpiderKartMultiplayer && window.SpiderKartMultiplayer.sendHit) {
             window.SpiderKartMultiplayer.sendHit(id);
@@ -2677,7 +3032,7 @@
         }
       }
 
-      // Colisión con obstáculos (misiles verdes 'missile' y teledirigidos 'homing')
+      // 8. Colisión con obstáculos
       let hitObstacle = false;
       if (!hitSomeone && (m.type === 'missile' || m.type === 'homing')) {
         for (const obs of obstacles) {
@@ -2699,9 +3054,7 @@
       }
 
       if (hitSomeone || hitObstacle) {
-        if (hitObstacle) {
-          spawnPickupBurst(m.x, m.y, m.z);
-        }
+        if (hitObstacle) spawnPickupBurst(m.x, m.y, m.z);
         scene.remove(m.mesh);
         activeMissiles.splice(i, 1);
       }
@@ -3248,13 +3601,32 @@
     drawMinimap();
   }
 
+  let isRenderingPaused = false;
+  let animFrameId = null;
+
   function animate() {
-    requestAnimationFrame(animate);
+    if (isRenderingPaused) return;
+    animFrameId = requestAnimationFrame(animate);
     const dt = clock.getDelta();
     pollGamepads();
     update(dt);
     updatePlayerMarkers();
     renderer.render(scene, camera);
+  }
+
+  function stopRendering() {
+    isRenderingPaused = true;
+    if (animFrameId) {
+      cancelAnimationFrame(animFrameId);
+      animFrameId = null;
+    }
+  }
+
+  function resumeRendering() {
+    if (!isRenderingPaused) return;
+    isRenderingPaused = false;
+    clock.getDelta(); // Reiniciar delta para prevenir saltos de física
+    animate();
   }
 
   // Resize
@@ -3287,11 +3659,38 @@
     },
     applyRemoteState,
     removeRemotePlayer,
-    resetRace(doLocalCountdown = true) {
+    setLocalKartColor,
+    updateRemoteKartColor,
+    stopRendering,
+    resumeRendering,
+    showClassificationScreen,
+    hideFinishScreen,
+    showWaitingAllFinishedHUD,
+    hideWaitingAllFinishedHUD,
+    updateFinishProgress(finishedCount, totalCount) {
+      showWaitingAllFinishedHUD(finishedCount, totalCount);
+    },
+    updateRematchStatus(readyCount, totalCount, readyIds) {
+      const rematchInfo = document.getElementById('fs-rematch-info');
+      const rematchText = document.getElementById('fs-rematch-text');
+      if (rematchInfo) rematchInfo.style.display = 'flex';
+      if (rematchText) {
+        rematchText.textContent = `Pilotos listos para la siguiente carrera: ${readyCount} / ${totalCount}`;
+      }
+    },
+    returnToMenu() {
+      hideFinishScreen();
+      resumeRendering();
+      const menuEl = document.getElementById('main-menu');
+      if (menuEl) menuEl.classList.remove('hidden');
+    },
+    resetRace(positionIndex = 0, doLocalCountdown = true) {
       state.lap = 0;
       state.raceFinished = false;
+      state.raceFinishedWaiting = false;
       state.bestLap = -1;
       state.lastLapTime = -1;
+      state.lapTimes = [];
       state.missiles = [];
       state.spinOutTimer = 0;
       state.invulnerableTimer = 0;
@@ -3306,6 +3705,13 @@
       state.stuntRotZ = 0;
       updateMissileHUD();
       resetCheckpoints();
+
+      // Limpiar misiles activos en la escena
+      for (const m of activeMissiles) {
+        scene.remove(m.mesh);
+      }
+      activeMissiles.length = 0;
+
       for (const ramp of ramps) {
         ramp.recentlyLaunched = false;
       }
@@ -3322,6 +3728,33 @@
         p.mesh.scale.setScalar(1.0);
       }
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
+
+      // Si el primer parámetro es un booleano (ej: resetRace(false)), interpretar como doLocalCountdown
+      let shouldReposition = true;
+      if (typeof positionIndex === 'boolean') {
+        doLocalCountdown = positionIndex;
+        shouldReposition = false; // Ya fue posicionado por lockAndReset()
+        positionIndex = 0;
+      }
+
+      if (shouldReposition) {
+        // Alineación HORIZONTAL en la línea de meta:
+        const pIdx = (typeof positionIndex === 'number') ? positionIndex : 0;
+        const lateralPositions = [ -3.2, 3.2, -1.1, 1.1, -5.2, 5.2 ];
+        const lateralOffset = (lateralPositions[pIdx] !== undefined)
+          ? lateralPositions[pIdx]
+          : ((pIdx % 2 === 0 ? -1 : 1) * (1.6 * Math.max(1, Math.ceil(pIdx / 2))));
+        const backwardOffset = 0; // Todos sobre la línea horizontal de meta
+
+        const s = trackSamples[0];
+        const startAngle = Math.atan2(s.tan.z, s.tan.x);
+
+        state.angle = startAngle;
+        state.posX = s.x + s.normal.x * lateralOffset - Math.cos(startAngle) * backwardOffset;
+        state.posZ = s.z + s.normal.z * lateralOffset - Math.sin(startAngle) * backwardOffset;
+        state.posY = s.y || 0;
+      }
+
       if (doLocalCountdown === true && !isSplitMode) {
         startLocalCountdown(3);
       }
@@ -3343,7 +3776,6 @@
     },
     triggerRemoteHit,
     consumeRemotePowerup(powerupIdx) {
-      // Llamado por multiplayer.js al recibir 'powerup_consumed' del servidor
       const p = powerups[powerupIdx];
       if (p && p.active) {
         p.active = false;
@@ -3367,10 +3799,20 @@
       kartGroup.visible = true;
       state.missiles = [];
       updateMissileHUD();
+
+      // Limpiar misiles activos en la escena
+      for (const m of activeMissiles) {
+        scene.remove(m.mesh);
+      }
+      activeMissiles.length = 0;
       
-      // Offset lateral basado en positionIndex
-      const lateralOffset = (positionIndex % 2 === 0 ? 1 : -1) * (2 + Math.floor(positionIndex/2) * 2);
-      const backwardOffset = Math.floor(positionIndex/2) * 3;
+      // Alineación horizontal en la línea de meta:
+      const pIdx = (typeof positionIndex === 'number') ? positionIndex : 0;
+      const lateralPositions = [ -3.2, 3.2, -1.1, 1.1, -5.2, 5.2 ];
+      const lateralOffset = (lateralPositions[pIdx] !== undefined)
+        ? lateralPositions[pIdx]
+        : ((pIdx % 2 === 0 ? -1 : 1) * (1.6 * Math.max(1, Math.ceil(pIdx / 2))));
+      const backwardOffset = 0; // Todos en la línea horizontal de meta
       
       const s = trackSamples[0];
       const startAngle = Math.atan2(s.tan.z, s.tan.x);
@@ -3378,15 +3820,15 @@
       state.angle = startAngle;
       state.posX = s.x + s.normal.x * lateralOffset - Math.cos(startAngle) * backwardOffset;
       state.posZ = s.z + s.normal.z * lateralOffset - Math.sin(startAngle) * backwardOffset;
-      state.posY = 0;
+      state.posY = s.y || 0;
     },
     unlock() {
       state.isLocked = false;
     },
     spinOut() {
       if (state.spinOutTimer <= 0 && state.invulnerableTimer <= 0) {
-        state.spinOutTimer = 1.5; // 1.5 segundos de trompo
-        state.invulnerableTimer = 3.0; // 1.5s trompo + 1.5s cooldown
+        state.spinOutTimer = 1.5;
+        state.invulnerableTimer = 3.0;
         state.speed = 0;
         state.powerActive = false;
         state.powerTimer = 0;
