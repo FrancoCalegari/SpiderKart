@@ -24,9 +24,6 @@
   const container = document.getElementById('game-canvas-container');
   if (!container) return;
 
-  const overlay = document.getElementById('canvas-overlay');
-  if (overlay) overlay.style.display = 'none';
-
   /* ──────────────────────────────────────────
      Scene, Camera, Renderer
   ────────────────────────────────────────── */
@@ -137,8 +134,38 @@
   let globalTerrainNodes = [];
   let globalBarriers = [];
 
+  function getTunnelClearance(wx, wz) {
+    if (!globalTerrainNodes || globalTerrainNodes.length === 0) return null;
+    for (const node of globalTerrainNodes) {
+      if (!node.hasHole && node.type !== 'mountain_tunnel') continue;
+      const cx = (node.x || 0) * WORLD_SCALE;
+      const cz = (node.z || 0) * WORLD_SCALE;
+      const dx = wx - cx;
+      const dz = wz - cz;
+      const rad = (node.radius || 50) * WORLD_SCALE;
+      if (dx * dx + dz * dz > rad * rad) continue;
+
+      const angleRad = ((node.holeAngle || 0) * Math.PI) / 180;
+      const perpDist = Math.abs(-dx * Math.sin(angleRad) + dz * Math.cos(angleRad));
+      const halfWidth = ((node.holeWidth || 22) * WORLD_SCALE) / 2;
+
+      if (perpDist <= halfWidth) {
+        return {
+          inTunnel: true,
+          ceilingY: Math.max(8, (node.holeHeight || 16) * WORLD_SCALE),
+          node
+        };
+      }
+    }
+    return null;
+  }
+
   function getTerrainHeightAt(wx, wz) {
     if (!globalTerrainNodes || globalTerrainNodes.length === 0) return 0;
+    const tunnel = getTunnelClearance(wx, wz);
+    if (tunnel && tunnel.inTunnel) {
+      return 0; // Despejado para circular por la pista
+    }
     let zh = 0;
     for (const node of globalTerrainNodes) {
       const dx = wx - (node.x * WORLD_SCALE);
@@ -156,17 +183,87 @@
 
   function sampleTrack() {
     trackSamples.length = 0;
+    // Paso 1: Muestrear posiciones base con elevación de curva y terreno
     for (let i = 0; i <= TRACK_SAMPLES; i++) {
       const t = i / TRACK_SAMPLES;
       const p = trackCurve.getPointAt(t);
-      const tan = trackCurve.getTangentAt(t).clone().normalize();
-      const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
-      // Incluimos la coordenada Y real del punto en la curva (elevación de pista) y sumamos el terreno
       const ty = getTerrainHeightAt(p.x, p.z);
-      trackSamples.push({ x: p.x, y: p.y + ty, z: p.z, tan, normal, t });
+      trackSamples.push({ x: p.x, y: p.y + ty, z: p.z, t });
+    }
+
+    // Paso 2: Calcular vectores tangentes 3D continuos y normales de calzada
+    for (let i = 0; i <= TRACK_SAMPLES; i++) {
+      const nextIdx = (i + 1) % TRACK_SAMPLES;
+      const prevIdx = (i - 1 + TRACK_SAMPLES) % TRACK_SAMPLES;
+      const pNext = trackSamples[nextIdx];
+      const pPrev = trackSamples[prevIdx];
+
+      const tan = new THREE.Vector3(pNext.x - pPrev.x, pNext.y - pPrev.y, pNext.z - pPrev.z).normalize();
+      const horizLen = Math.hypot(tan.x, tan.z) || 1;
+      const normal = new THREE.Vector3(-tan.z / horizLen, 0, tan.x / horizLen);
+
+      trackSamples[i].tan = tan;
+      trackSamples[i].normal = normal;
     }
   }
   sampleTrack();
+
+  // Interpolador de altura continua a lo largo de la spline de la pista
+  function getInterpolatedTrackHeight(posX, posZ, nearestIdx) {
+    if (!trackSamples || trackSamples.length < 2) return 0;
+    const count = TRACK_SAMPLES;
+    const sCurr = trackSamples[nearestIdx];
+    if (!sCurr) return 0;
+
+    const nextIdx = (nearestIdx + 1) % count;
+    const prevIdx = (nearestIdx - 1 + count) % count;
+    const sNext = trackSamples[nextIdx];
+    const sPrev = trackSamples[prevIdx];
+
+    // Segmento hacia adelante (sCurr -> sNext)
+    const dnx = sNext.x - sCurr.x;
+    const dnz = sNext.z - sCurr.z;
+    const lenNextSq = dnx * dnx + dnz * dnz;
+    const dotNext = (posX - sCurr.x) * dnx + (posZ - sCurr.z) * dnz;
+
+    if (lenNextSq > 0 && dotNext >= 0) {
+      const t = Math.min(1, dotNext / lenNextSq);
+      return sCurr.y + t * (sNext.y - sCurr.y);
+    }
+
+    // Segmento hacia atrás (sPrev -> sCurr)
+    const dpx = sCurr.x - sPrev.x;
+    const dpz = sCurr.z - sPrev.z;
+    const lenPrevSq = dpx * dpx + dpz * dpz;
+    const dotPrev = (posX - sPrev.x) * dpx + (posZ - sPrev.z) * dpz;
+
+    if (lenPrevSq > 0) {
+      const t = Math.max(0, Math.min(1, dotPrev / lenPrevSq));
+      return sPrev.y + t * (sCurr.y - sPrev.y);
+    }
+
+    return sCurr.y;
+  }
+
+  // Interpolador de altura continua para atajos
+  function getInterpolatedShortcutHeight(posX, posZ, scTrack, scIdx) {
+    if (!scTrack || !scTrack.samples || scTrack.samples.length < 2) return 0;
+    const samples = scTrack.samples;
+    const count = samples.length;
+    const sCurr = samples[Math.min(scIdx, count - 1)];
+    const nextIdx = Math.min(count - 1, scIdx + 1);
+    const sNext = samples[nextIdx];
+
+    const dx = sNext.x - sCurr.x;
+    const dz = sNext.z - sCurr.z;
+    const lenSq = dx * dx + dz * dz;
+    if (lenSq > 0) {
+      const dot = (posX - sCurr.x) * dx + (posZ - sCurr.z) * dz;
+      const t = Math.max(0, Math.min(1, dot / lenSq));
+      return sCurr.y + t * (sNext.y - sCurr.y);
+    }
+    return sCurr.y;
+  }
 
   function offsetCurve(dist, baseY = 0.5) {
     const pts = trackSamples.map(s => new THREE.Vector3(
@@ -176,19 +273,102 @@
   }
 
   /* ──────────────────────────────────────────
-     Track meshes
+     Track meshes & Montañas con Túneles
   ────────────────────────────────────────── */
+  function createMountainMesh(node, worldScale = 1.8) {
+    const group = new THREE.Group();
+    const radius = (node.radius || 50) * worldScale;
+    const height = Math.max(16, (node.height || 45) * worldScale);
+    const holeWidth = Math.max(12, (node.holeWidth || 22) * worldScale);
+    const holeHeight = Math.min(height * 0.75, Math.max(8, (node.holeHeight || 16) * worldScale));
+    const angleRad = ((node.holeAngle || 0) * Math.PI) / 180;
+
+    const rockMat = new THREE.MeshStandardMaterial({
+      color: 0x18101a, roughness: 0.95, metalness: 0.15, flatShading: true
+    });
+    const neonPortalMat = new THREE.MeshStandardMaterial({
+      color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.85, roughness: 0.2
+    });
+
+    if (node.hasHole || node.type === 'mountain_tunnel') {
+      const flankOffset = (holeWidth / 2) + (radius * 0.32);
+      const flankGeo = new THREE.ConeGeometry(radius * 0.55, height, 6);
+
+      const leftFlank = new THREE.Mesh(flankGeo, rockMat);
+      leftFlank.position.set(-Math.sin(angleRad + Math.PI/2) * flankOffset, height / 2, Math.cos(angleRad + Math.PI/2) * flankOffset);
+      leftFlank.castShadow = true;
+      leftFlank.receiveShadow = true;
+      group.add(leftFlank);
+
+      const rightFlank = new THREE.Mesh(flankGeo, rockMat);
+      rightFlank.position.set(Math.sin(angleRad + Math.PI/2) * flankOffset, height / 2, -Math.cos(angleRad + Math.PI/2) * flankOffset);
+      rightFlank.castShadow = true;
+      rightFlank.receiveShadow = true;
+      group.add(rightFlank);
+
+      const archThickness = Math.max(6, height - holeHeight);
+      const archGeo = new THREE.BoxGeometry(holeWidth * 1.5, archThickness, radius * 1.5);
+      const archMesh = new THREE.Mesh(archGeo, rockMat);
+      archMesh.position.set(0, holeHeight + archThickness / 2, 0);
+      archMesh.rotation.y = -angleRad;
+      archMesh.castShadow = true;
+      archMesh.receiveShadow = true;
+      group.add(archMesh);
+
+      const tunnelGeo = new THREE.CylinderGeometry(holeWidth * 0.52, holeWidth * 0.52, radius * 1.8, 12, 1, true);
+      const tunnelMat = new THREE.MeshStandardMaterial({
+        color: 0x0f0b12, roughness: 0.95, side: THREE.BackSide
+      });
+      const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+      tunnelMesh.position.set(0, holeHeight * 0.55, 0);
+      tunnelMesh.rotation.x = Math.PI / 2;
+      tunnelMesh.rotation.z = -angleRad;
+      group.add(tunnelMesh);
+
+      const portalGeo = new THREE.TorusGeometry(holeWidth * 0.54, 0.45, 8, 16, Math.PI);
+      const forwardX = Math.cos(angleRad) * (radius * 0.85);
+      const forwardZ = Math.sin(angleRad) * (radius * 0.85);
+
+      const entrancePortal = new THREE.Mesh(portalGeo, neonPortalMat);
+      entrancePortal.position.set(forwardX, holeHeight * 0.5, forwardZ);
+      entrancePortal.rotation.y = -angleRad + Math.PI / 2;
+      group.add(entrancePortal);
+
+      const exitPortal = new THREE.Mesh(portalGeo, neonPortalMat);
+      exitPortal.position.set(-forwardX, holeHeight * 0.5, -forwardZ);
+      exitPortal.rotation.y = -angleRad - Math.PI / 2;
+      group.add(exitPortal);
+
+    } else {
+      const coneGeo = new THREE.ConeGeometry(radius, height, 7);
+      const cone = new THREE.Mesh(coneGeo, rockMat);
+      cone.position.set(0, height / 2, 0);
+      cone.rotation.y = Math.random() * Math.PI;
+      cone.castShadow = true;
+      cone.receiveShadow = true;
+      group.add(cone);
+    }
+
+    group.position.set((node.x || 0) * worldScale, 0, (node.z || 0) * worldScale);
+    return group;
+  }
+
   function addMountains(group) {
+    const customMountains = (globalTerrainNodes || []).filter(n => n.type === 'mountain' || n.type === 'mountain_tunnel' || n.hasHole);
+    if (customMountains.length > 0) {
+      for (const node of customMountains) {
+        group.add(createMountainMesh(node, WORLD_SCALE));
+      }
+      return;
+    }
+
     const mountMat = new THREE.MeshStandardMaterial({
       color: 0x140912, roughness: 1, metalness: 0,
       emissive: 0x22040a, emissiveIntensity: 0.25
     });
-    // Distancia mínima desde el centro de la pista (incluye el ancho de la pista + margen)
-    const MIN_DIST_FROM_TRACK = HALF_WIDTH + 90; // unidades de mundo
-    // Usamos una versión sparse de trackSamples (cada 10 muestras) para mayor precisión
+    const MIN_DIST_FROM_TRACK = HALF_WIDTH + 90;
     const sparseSamples = trackSamples.filter((_, i) => i % 10 === 0);
 
-    // Verifica que el cono (con su propio radio) no esté cerca de ningún punto de la pista
     function isTooCloseToTrack(px, pz, coneRadius) {
       const minDist = MIN_DIST_FROM_TRACK + coneRadius;
       const minDistSq = minDist * minDist;
@@ -199,7 +379,6 @@
       return false;
     }
 
-    // Calcular bounding box real de la pista (no sólo radio polar)
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const s of sparseSamples) {
       if (s.x < minX) minX = s.x;
@@ -221,7 +400,6 @@
       const pz = spawnMinZ + Math.random() * (spawnMaxZ - spawnMinZ);
       const h = 32 + Math.random() * 60;
       const rad = 22 + Math.random() * 30;
-      // Rechazar si el cono (con su radio) queda demasiado cerca de la pista
       if (isTooCloseToTrack(px, pz, rad)) continue;
       const geo = new THREE.ConeGeometry(rad, h, 6);
       const m = new THREE.Mesh(geo, mountMat);
@@ -304,11 +482,12 @@
     trackMesh.receiveShadow = true;
     group.add(trackMesh);
 
-    // Línea central roja
-    const lineGeo = new THREE.TubeGeometry(trackCurve, 600, 0.2, 6, true);
+    // Línea central roja (construida desde trackSamples para respetar elevación 3D del asfalto)
+    const centerPts = trackSamples.map(s => new THREE.Vector3(s.x, (s.y || 0) + 0.08, s.z));
+    const centerCurve = new THREE.CatmullRomCurve3(centerPts, true);
+    const lineGeo = new THREE.TubeGeometry(centerCurve, 600, 0.2, 6, true);
     const lineMat = new THREE.MeshStandardMaterial({ color: 0xa30000, emissive: 0xa30000, emissiveIntensity: 1.4 });
     const centerLine = new THREE.Mesh(lineGeo, lineMat);
-    centerLine.position.y = 0.06;
     group.add(centerLine);
 
     // Barreras laterales neón
@@ -326,27 +505,27 @@
     addBarrier(HALF_WIDTH + BARRIER_GAP);
     addBarrier(-(HALF_WIDTH + BARRIER_GAP));
 
-    // Línea de meta
+    // Línea de meta elevada
     const startSampleLocal = trackSamples[0];
     const startAngleLocal = Math.atan2(startSampleLocal.tan.z, startSampleLocal.tan.x);
     const startGeo = new THREE.BoxGeometry(1.0, 0.05, HALF_WIDTH * 2);
     const startMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
     const startLine = new THREE.Mesh(startGeo, startMat);
-    startLine.position.set(startSampleLocal.x, 0.07, startSampleLocal.z);
+    startLine.position.set(startSampleLocal.x, (startSampleLocal.y || 0) + 0.07, startSampleLocal.z);
     startLine.rotation.y = -startAngleLocal;
     group.add(startLine);
 
-    // Pilares neón
-    const pillarGeo = new THREE.CylinderGeometry(0.45, 0.45, 7, 8);
+    // Balizas luminosas neón sobre los bordillos exteriores
+    const pillarGeo = new THREE.CylinderGeometry(0.3, 0.4, 4.0, 8);
     const pillarMat = new THREE.MeshStandardMaterial({
-      color: 0x111111, emissive: 0xa30000, emissiveIntensity: 0.4, metalness: 0.8
+      color: 0x111111, emissive: 0xa30000, emissiveIntensity: 0.5, metalness: 0.8
     });
     for (let i = 0; i < 60; i++) {
       const s = trackSamples[Math.floor((i / 60) * TRACK_SAMPLES)];
       const side = i % 2 === 0 ? 1 : -1;
-      const dist = HALF_WIDTH + 11;
+      const dist = HALF_WIDTH + 1.2;
       const pillar = new THREE.Mesh(pillarGeo, pillarMat);
-      pillar.position.set(s.x + s.normal.x * dist * side, 3.5, s.z + s.normal.z * dist * side);
+      pillar.position.set(s.x + s.normal.x * dist * side, (s.y || 0) + 2.0, s.z + s.normal.z * dist * side);
       pillar.castShadow = true;
       group.add(pillar);
     }
@@ -417,7 +596,7 @@
       // Construir puntos de la curva del atajo (conexión suave en inicio y fin)
       const pts = [
         startAnchor,
-        ...((controlPts).map(([x, y, z]) => new THREE.Vector3(x, getTerrainHeightAt(x, z), z))),
+        ...((controlPts).map(([x, y, z]) => new THREE.Vector3(x, (y || 0) + getTerrainHeightAt(x, z), z))),
         endAnchor
       ];
       const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
@@ -561,7 +740,17 @@
     buildManualBarriers();
     if (typeof kartGroup !== 'undefined') {
       const s0 = trackSamples[0];
-      kartGroup.position.set(s0.x, s0.y || 0, s0.z);
+      const s0Y = s0.y || 0;
+      kartGroup.position.set(s0.x, s0Y, s0.z);
+      if (typeof state !== 'undefined') {
+        state.posX = s0.x;
+        state.posZ = s0.z;
+        state.posY = s0Y;
+        state.angle = Math.atan2(s0.tan.z, s0.tan.x);
+        state.speed = 0;
+        state.velY = 0;
+        state.isGrounded = true;
+      }
     }
     if (window.SpiderKart) {
       window.SpiderKart.trackHalfWidth = HALF_WIDTH;
@@ -650,16 +839,17 @@
         group.add(base, spikeMesh); lightColor = 0x9900ff;
       }
       const randScale = 0.85 + Math.random() * 0.35;
+      const sy = s.y || 0;
       group.scale.setScalar(randScale);
       group.rotation.y = Math.random() * Math.PI * 2;
-      group.position.set(ox, 0, oz);
+      group.position.set(ox, sy, oz);
       scene.add(group);
       const light = new THREE.PointLight(lightColor, 1.5, 6);
-      light.position.set(ox, 1.5, oz);
+      light.position.set(ox, sy + 1.5, oz);
       scene.add(light);
       obstacles.push({
         mesh: group, spike: spikeMesh, light,
-        x: ox, z: oz, height: 1.9 * randScale, radius: 1.7 * randScale,
+        x: ox, y: sy, z: oz, height: 1.9 * randScale, radius: 1.7 * randScale,
         color: lightColor, active: true, respawnTimer: 0,
         sampleIdx, lateral, lane, type: t
       });
@@ -833,25 +1023,29 @@
         }
       }
 
+      const sy = s.y || 0;
       const angle = Math.atan2(s.tan.z, s.tan.x);
+      const horizLen = Math.hypot(s.tan.x, s.tan.z) || 1;
+      const slopePitch = Math.atan2(s.tan.y || 0, horizLen);
       const isCyan = cfg.type === 'cyan';
       const mesh = createRampMesh(RAMP_WIDTH, RAMP_LENGTH, RAMP_HEIGHT, isCyan);
-      mesh.position.set(rx, 0, rz);
+      mesh.position.set(rx, sy, rz);
       mesh.rotation.y = -angle + Math.PI / 2;
+      mesh.rotation.z = slopePitch;
       scene.add(mesh);
 
       const lightColor = isCyan ? 0x00e5ff : 0xffaa00;
       const light = new THREE.PointLight(lightColor, 1.6, 9);
-      light.position.set(rx, 1.2, rz);
+      light.position.set(rx, sy + 1.2, rz);
       scene.add(light);
 
       ramps.push({
         mesh, light,
-        x: rx, z: rz,
+        x: rx, y: sy, z: rz,
         tanX: s.tan.x, tanZ: s.tan.z,
         normX: s.normal.x, normZ: s.normal.z,
         width: RAMP_WIDTH, length: RAMP_LENGTH, height: RAMP_HEIGHT,
-        angle, recentlyLaunched: false,
+        angle, slopePitch, recentlyLaunched: false,
         sampleIdx, lane: cfg.lane || 0, type: cfg.type || 'gold'
       });
     }
@@ -888,15 +1082,17 @@
 
       if (nearRampTip) {
         const progress = Math.min(1.0, Math.max(0.0, (longDist + halfL) / ramp.length));
-        const rampY = progress * ramp.height;
+        const rampBaseY = ramp.y || 0;
+        const rampY = rampBaseY + progress * ramp.height;
 
         // Snapear al suelo de la rampa SOLO si está en la zona real de la rampa,
         // el kart está descendiendo (velY <= 0) y no fue lanzado aún
-        if (onRampSurface && !ramp.recentlyLaunched && state.posY <= rampY + 0.3 && state.velY <= 0) {
+        if (onRampSurface && !ramp.recentlyLaunched && state.posY <= rampY + 0.4 && state.velY <= 0) {
           state.posY = rampY;
           state.isGrounded = true;
           state.velY = 0;
-          state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0.24, 0.3);
+          const targetRampPitch = 0.24 + (ramp.slopePitch || 0);
+          state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, targetRampPitch, 0.3);
           rampGroundedThisFrame = true; // ← marcar que la rampa está sosteniendo al kart
         }
 
@@ -904,10 +1100,11 @@
         const dot = dirX * ramp.tanX + dirZ * ramp.tanZ;
         if (longDist >= halfL - 0.9 && !ramp.recentlyLaunched && state.speed > 0.05 && dot > 0.1) {
           ramp.recentlyLaunched = true;
+          state.posY = rampBaseY + ramp.height;
           state.velY = 0.36 + Math.min(Math.abs(state.speed), MAX_SPEED) * 0.14;
           state.isGrounded = false;
           state.speed = Math.max(state.speed * 1.08, MAX_SPEED * 1.15); // Jump boost!
-          state.kartPitch = 0.32;
+          state.kartPitch = 0.32 + (ramp.slopePitch || 0);
           state.rampJumpBoost = true;
 
           // Iniciar Acrobacia en el aire
@@ -928,7 +1125,7 @@
           const selectedStunt = stuntTypes[Math.floor(Math.random() * stuntTypes.length)];
           state.stuntType = selectedStunt.type;
 
-          // Efectos de despegue con ráfaga neón
+          // Efectos de despegue con ráfaga neón en la altura elevada
           spawnPickupBurst(state.posX, state.posY + 0.4, state.posZ);
           for (let k = 0; k < 18; k++) {
             const spd = 0.06 + Math.random() * 0.1;
@@ -958,9 +1155,11 @@
 
     // Si el kart salió de la rampa sin haber saltado (rampGroundedThisFrame=false)
     // pero sigue flotando por encima del suelo real, liberar la gravedad.
-    // Esto ocurre cuando el auto entra a la rampa y sale sin la velocidad/dirección
-    // necesaria para el lanzamiento.
-    if (!rampGroundedThisFrame && state.isGrounded && state.posY > GROUND_Y + 0.05) {
+    const currentGroundY = state.onShortcut
+      ? getInterpolatedShortcutHeight(state.posX, state.posZ, state.onShortcut, state.nearestScIdx || 0)
+      : getInterpolatedTrackHeight(state.posX, state.posZ, state.nearestIdx || 0);
+    const effectiveBaseY = Math.max(currentGroundY, getTerrainHeightAt(state.posX, state.posZ));
+    if (!rampGroundedThisFrame && state.isGrounded && state.posY > effectiveBaseY + 0.6) {
       state.isGrounded = false;
       state.velY = 0; // caída sin rebote
     }
@@ -1016,12 +1215,13 @@
       const gem  = new THREE.Mesh(boxGeo, mats.gem);
       const ring = new THREE.Mesh(ringGeo, mats.ring);
       ring.rotation.x = Math.PI / 2;
+      const sy = s.y || 0;
       group.add(gem, ring);
-      group.position.set(px, 1.3, pz);
+      group.position.set(px, sy + 1.3, pz);
       scene.add(group);
       powerups.push({
         mesh: group,
-        basePos: new THREE.Vector3(px, 1.3, pz),
+        basePos: new THREE.Vector3(px, sy + 1.3, pz),
         type: validType, active: true, respawnTimer: 0,
         sampleIdx, lane
       });
@@ -1097,6 +1297,7 @@
      Kart local
   ────────────────────────────────────────── */
   const kartGroup = new THREE.Group();
+  kartGroup.rotation.order = 'YXZ';
 
   const bodyMat = new THREE.MeshStandardMaterial({
     color: 0xa30000, roughness: 0.3, metalness: 0.7,
@@ -1179,6 +1380,7 @@
 
   function createGhostKart(color, name) {
     const group = new THREE.Group();
+    group.rotation.order = 'YXZ';
     const ghostBodyMat = new THREE.MeshStandardMaterial({
       color, roughness: 0.35, metalness: 0.6,
       emissive: color, emissiveIntensity: 0.35,
@@ -1471,7 +1673,11 @@
   }
 
   // Onda expansiva de chispas y humo al aterrizar con mini turbo
-  function spawnLandingShockwave(x, z) {
+  function spawnLandingShockwave(x, y = 0, z) {
+    if (typeof z === 'undefined') { // Compatibilidad si se llama con (x, z)
+      z = y;
+      y = 0;
+    }
     const count = 28;
     for (let i = 0; i < count; i++) {
       const angle = (i / count) * Math.PI * 2;
@@ -1479,7 +1685,7 @@
       const isGold = Math.random() > 0.3;
       spawnParticle(
         x + Math.cos(angle) * 0.5,
-        0.15 + Math.random() * 0.15,
+        y + 0.15 + Math.random() * 0.15,
         z + Math.sin(angle) * 0.5,
         Math.cos(angle) * speed,
         0.04 + Math.random() * 0.05,
@@ -1492,7 +1698,7 @@
     for (let k = 0; k < 14; k++) {
       spawnParticle(
         x + (Math.random() - 0.5) * 1.2,
-        0.2 + Math.random() * 0.3,
+        y + 0.2 + Math.random() * 0.3,
         z + (Math.random() - 0.5) * 1.2,
         (Math.random() - 0.5) * 0.06,
         0.08 + Math.random() * 0.08,
@@ -1544,17 +1750,41 @@
   const isKeyboardOnly = urlParamsEngine.get('keyboard') === '1';
   const isSplitMode    = urlParamsEngine.get('splitMode') === '1';
 
-  // Teclado — en splitMode el padre intercepta todo el teclado y lo envia via postMessage
+  // Si está en modo split, activar clase para adaptar el HUD y ocultar elementos innecesarios
+  if (isSplitMode) {
+    document.body.classList.add('is-split-mode');
+  }
+
+  // Teclado — en splitMode reenviamos eventos al padre (split.html) para que ningún clic rompa el foco
   const allowKeyboard = !isSplitMode && (isKeyboardOnly || forcedGamepad === null);
   window.addEventListener('keydown', e => {
+    if (isSplitMode) {
+      try {
+        window.parent.postMessage({ type: 'sk-key-event', action: 'down', code: e.code }, '*');
+      } catch(_) {}
+      return;
+    }
     if (!allowKeyboard) return;
     keys[e.code] = true;
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown') e.preventDefault();
   });
   window.addEventListener('keyup', e => { 
+    if (isSplitMode) {
+      try {
+        window.parent.postMessage({ type: 'sk-key-event', action: 'up', code: e.code }, '*');
+      } catch(_) {}
+      return;
+    }
     if (!allowKeyboard) return;
     keys[e.code] = false; 
   });
+  if (isSplitMode) {
+    window.addEventListener('blur', () => {
+      try {
+        window.parent.postMessage({ type: 'sk-key-blur' }, '*');
+      } catch(_) {}
+    });
+  }
 
   // Táctil
   function setupTouchBtn(id, key) {
@@ -1743,7 +1973,7 @@
     angle: startAngle0,
     posX: startSample.x,
     posZ: startSample.z,
-    posY: 0,
+    posY: startSample.y || 0,
     velY: 0,
     isGrounded: true,
     wheelRot: 0,
@@ -1790,6 +2020,7 @@
     missileCooldown: 0,
     spinOutTimer: 0,
     invulnerableTimer: 0,
+    airTime: 0,
     kartPitch: 0
   };
 
@@ -1902,10 +2133,18 @@
     if (hudCountdown) hudCountdown.classList.add('hidden');
   }
 
-  function startLocalCountdown() {
-    if (localCountdownTimer) clearInterval(localCountdownTimer);
+  function cancelLocalCountdown() {
+    if (localCountdownTimer) {
+      clearInterval(localCountdownTimer);
+      localCountdownTimer = null;
+    }
+    hideCountdown();
+  }
+
+  function startLocalCountdown(seconds = 3) {
+    cancelLocalCountdown();
     state.isLocked = true;
-    let count = 5;
+    let count = seconds;
     showCountdownNum(count);
 
     localCountdownTimer = setInterval(() => {
@@ -2099,7 +2338,8 @@
       const s = trackSamples[i];
       const dx = state.posX - s.x;
       const dz = state.posZ - s.z;
-      const dist = dx * dx + dz * dz;
+      const dy = (state.posY - (s.y || 0));
+      const dist = dx * dx + dz * dz + dy * dy * 3.5;
       if (dist < bestDist) { bestDist = dist; bestIdx = i; }
     }
 
@@ -2112,7 +2352,8 @@
         const s = sc.samples[i];
         const dx = state.posX - s.x;
         const dz = state.posZ - s.z;
-        const d2 = dx * dx + dz * dz;
+        const dy = (state.posY - (s.y || 0));
+        const d2 = dx * dx + dz * dz + dy * dy * 3.5;
         if (d2 < bestScDist) { bestScDist = d2; bestScIdx = i; bestScTrack = sc; }
       }
     }
@@ -2126,6 +2367,7 @@
       effectiveHW = bestScTrack.hw;
       state.nearestIdx = bestIdx; // guardar índice principal de todas formas
       state.onShortcut = bestScTrack;
+      state.nearestScIdx = bestScIdx;
       // Mapear el t del atajo al t de la pista principal
       const scT = sample.t; // 0..1 dentro del atajo
       state.lastT = bestScTrack.startT + scT * (bestScTrack.endT - bestScTrack.startT);
@@ -2134,6 +2376,7 @@
       effectiveHW = HALF_WIDTH;
       state.nearestIdx = bestIdx;
       state.onShortcut = null;
+      state.nearestScIdx = -1;
     }
 
     // ── 4. Colisión con barreras manuales (topes) ──
@@ -2164,13 +2407,25 @@
       }
     }
 
-    // ── 5. Detección Off-Road (Fuera de pista) ──
+    // ── 5. Colisión con barreras laterales y Detección Off-Road ──
     const relX = state.posX - sample.x;
     const relZ = state.posZ - sample.z;
     const perp = relX * sample.normal.x + relZ * sample.normal.z;
-    const limit = effectiveHW;
+    const isElevated = (sample.y || 0) > (getTerrainHeightAt(state.posX, state.posZ) + 1.2);
+    const barrierLimit = effectiveHW + 0.6;
 
-    state.isOffRoad = Math.abs(perp) > limit;
+    // En tramos elevados, las barreras neón contienen al kart si no va en un gran salto
+    if (isElevated && Math.abs(perp) > barrierLimit && state.posY < ((sample.y || 0) + 2.5)) {
+      const sign = perp > 0 ? 1 : -1;
+      const penetration = Math.abs(perp) - barrierLimit;
+      state.posX -= sample.normal.x * sign * penetration;
+      state.posZ -= sample.normal.z * sign * penetration;
+      state.speed *= 0.88;
+      state.isOffRoad = false;
+    } else {
+      const limit = effectiveHW + 1.8; // Tolerancia de bordillos neón antes de considerar off-road
+      state.isOffRoad = Math.abs(perp) > limit;
+    }
 
     // Detección de sentido contrario o fuera de pista
     const dirX = Math.cos(state.angle);
@@ -2226,7 +2481,8 @@
 
         const dx = state.posX - p.mesh.position.x;
         const dz = state.posZ - p.mesh.position.z;
-        if (dx * dx + dz * dz < POWERUP_PICKUP_RADIUS * POWERUP_PICKUP_RADIUS) {
+        const dy = state.posY - p.mesh.position.y;
+        if (dx * dx + dz * dz < POWERUP_PICKUP_RADIUS * POWERUP_PICKUP_RADIUS && Math.abs(dy) < 3.2) {
           const puIdx = powerups.indexOf(p);
           p.active = false;
           p.respawnTimer = POWERUP_RESPAWN;
@@ -2371,6 +2627,21 @@
 
       m.x += Math.cos(m.angle) * m.speed;
       m.z += Math.sin(m.angle) * m.speed;
+      // Adaptar suavemente m.y a la altura de la pista o terreno bajo el misil
+      const terrainY = getTerrainHeightAt(m.x, m.z);
+      let trackGroundY = terrainY;
+      if (trackSamples.length > 0) {
+        let closestY = terrainY;
+        let closestDist = Infinity;
+        for (let sIdx = 0; sIdx < trackSamples.length; sIdx += 8) {
+          const s = trackSamples[sIdx];
+          const d2 = (m.x - s.x)**2 + (m.z - s.z)**2;
+          if (d2 < closestDist) { closestDist = d2; closestY = s.y; }
+        }
+        if (closestDist < 400) trackGroundY = Math.max(closestY, terrainY);
+      }
+      const targetY = trackGroundY + 0.6;
+      m.y = THREE.MathUtils.lerp(m.y, targetY, Math.min(1, dt * 6.0));
       m.mesh.position.set(m.x, m.y, m.z);
       m.mesh.rotation.y = -m.angle + Math.PI / 2;
 
@@ -2420,8 +2691,8 @@
             obs.respawnTimer = OBSTACLE_RESPAWN;
             obs.mesh.visible = false;
             if (obs.light) obs.light.visible = false;
-            spawnPickupBurst(obs.x, 1.0, obs.z);
-            spawnObstacleExplosion(obs.x, 1.0, obs.z, obs.color);
+            spawnPickupBurst(obs.x, (obs.y || 0) + 1.0, obs.z);
+            spawnObstacleExplosion(obs.x, (obs.y || 0) + 1.0, obs.z, obs.color);
             break;
           }
         }
@@ -2460,7 +2731,7 @@
           obs.active = true;
           obs.mesh.visible = true;
           if (obs.light) obs.light.visible = true;
-          spawnPickupBurst(obs.x, 1.0, obs.z);
+          spawnPickupBurst(obs.x, (obs.y || 0) + 1.0, obs.z);
         }
         continue;
       }
@@ -2469,15 +2740,16 @@
       const dz = state.posZ - obs.z;
       const distSq = dx * dx + dz * dz;
       if (distSq < obs.radius * obs.radius) {
+        const baseObsY = obs.y || 0;
         const obsHeight = obs.height || 1.8;
-        if (state.posY < obsHeight) {
+        if (state.posY >= baseObsY - 0.4 && state.posY < baseObsY + obsHeight) {
           if (state.spinOutTimer <= 0 && state.invulnerableTimer <= 0) {
             state.spinOutTimer = 1.5; // Gira durante 1.5 segundos
             state.invulnerableTimer = 3.0; // 1.5s giro + 1.5s cooldown de inmunidad
             state.speed *= 0.2;
-            spawnPickupBurst(obs.x, 1.0, obs.z);
+            spawnPickupBurst(obs.x, baseObsY + 1.0, obs.z);
           }
-        } else {
+        } else if (state.posY >= baseObsY + obsHeight) {
           // El kart sobrevoló exitosamente el obstáculo en el aire
           if (!obs.clearedInAir) {
             obs.clearedInAir = true;
@@ -2658,6 +2930,7 @@
 
     // ── Gravedad y Dinámica Aérea ──
     if (!state.isGrounded) {
+      state.airTime = (state.airTime || 0) + dt;
       state.velY += GRAVITY;
       state.posY += state.velY;
 
@@ -2700,22 +2973,54 @@
         }
       }
     } else {
-      state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, 0, 0.2);
+      // En el suelo: inclinar suavemente el chasis según la pendiente de subida/bajada de la pista o atajo
+      const activeSample = (state.onShortcut && state.onShortcut.samples)
+        ? (state.onShortcut.samples[state.nearestScIdx || 0] || trackSamples[0])
+        : (trackSamples[state.nearestIdx] || trackSamples[0]);
+      const horizLen = Math.hypot(activeSample.tan.x, activeSample.tan.z) || 1;
+      const slopePitch = Math.atan2(activeSample.tan.y || 0, horizLen);
+      const dot = Math.cos(state.angle) * activeSample.tan.x + Math.sin(state.angle) * activeSample.tan.z;
+      const targetPitch = slopePitch * (dot >= 0 ? 1 : -1);
+      state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, targetPitch, 0.20);
     }
 
     // ── Colisión con el suelo / terreno (se ejecuta SIEMPRE, grounded o no) ──
     {
-      const nearSample = trackSamples[state.nearestIdx] || trackSamples[0];
-      const trackGroundY = nearSample.y || 0;
+      const trackGroundY = state.onShortcut
+        ? getInterpolatedShortcutHeight(state.posX, state.posZ, state.onShortcut, state.nearestScIdx || 0)
+        : getInterpolatedTrackHeight(state.posX, state.posZ, state.nearestIdx || 0);
       const terrainHeight = getTerrainHeightAt(state.posX, state.posZ);
-      const dynamicGroundY = state.isOffRoad ? terrainHeight : Math.max(trackGroundY, terrainHeight);
+      const tunnel = getTunnelClearance(state.posX, state.posZ);
+      const dynamicGroundY = (tunnel && tunnel.inTunnel) ? trackGroundY : (state.isOffRoad ? terrainHeight : Math.max(trackGroundY, terrainHeight));
 
-      if (state.posY <= dynamicGroundY) {
+      // Si está dentro del túnel, verificar choque con techo
+      if (tunnel && tunnel.inTunnel) {
+        const ceilingLimit = tunnel.ceilingY - 2.0;
+        if (state.posY > ceilingLimit) {
+          state.posY = ceilingLimit;
+          state.velY = -Math.abs(state.velY) * 0.4;
+        }
+      }
+
+      // Adherencia al suelo (ground snapping) en bajadas continuas
+      const distAboveGround = state.posY - dynamicGroundY;
+      const canSnapToGround = state.isGrounded && distAboveGround > 0 && distAboveGround < 0.45 && !state.rampJumpBoost && state.velY <= 0.05;
+
+      if (distAboveGround <= 0 || canSnapToGround) {
         state.posY = dynamicGroundY;
-        const wasAirborne = !state.isGrounded;
+        const wasAirborne = !state.isGrounded && ((state.airTime || 0) > 0.22 || state.rampJumpBoost);
         state.velY = 0;
         state.isGrounded = true;
-        state.kartPitch = 0;
+        state.airTime = 0;
+
+        // Inclinación al tocar superficie
+        const activeSample = (state.onShortcut && state.onShortcut.samples)
+          ? (state.onShortcut.samples[state.nearestScIdx || 0] || trackSamples[0])
+          : (trackSamples[state.nearestIdx] || trackSamples[0]);
+        const horizLen = Math.hypot(activeSample.tan.x, activeSample.tan.z) || 1;
+        const slopePitch = Math.atan2(activeSample.tan.y || 0, horizLen);
+        const dot = Math.cos(state.angle) * activeSample.tan.x + Math.sin(state.angle) * activeSample.tan.z;
+        state.kartPitch = THREE.MathUtils.lerp(state.kartPitch || 0, slopePitch * (dot >= 0 ? 1 : -1), 0.25);
 
         // Si venía de una rampa / acrobacia: ¡Activar Mini Turbo de aterrizaje!
         if (wasAirborne && (state.stuntActive || state.rampJumpBoost)) {
@@ -2725,7 +3030,7 @@
             f.visible = true;
             f.scale.setScalar(1.5);
           });
-          spawnLandingShockwave(state.posX, state.posZ);
+          spawnLandingShockwave(state.posX, state.posY, state.posZ);
           
           if (hudItemFx) {
             hudItemFx.classList.remove('hidden');
@@ -2736,7 +3041,7 @@
             requestAnimationFrame(() => { hudItemFx.style.animation = ''; });
           }
         } else if (wasAirborne) {
-          spawnPickupBurst(state.posX, 0.2, state.posZ);
+          spawnPickupBurst(state.posX, state.posY + 0.2, state.posZ);
         }
 
         if (wasAirborne) {
@@ -2748,9 +3053,6 @@
           state.stuntRotX = 0;
           state.stuntRotY = 0;
           state.stuntRotZ = 0;
-          // Resetear las rotaciones del grupo directamente para evitar drift acumulado
-          kartGroup.rotation.x = 0;
-          kartGroup.rotation.z = 0;
         }
       } else {
         // El kart está por encima del suelo → en el aire
@@ -2769,14 +3071,16 @@
     // ── Transform del Kart ──
     kartGroup.position.set(state.posX, state.posY, state.posZ);
     kartGroup.rotation.y = -state.angle + Math.PI / 2 + (state.stuntRotY || 0);
-    kartGroup.rotation.x = (state.kartPitch || 0) + (state.stuntRotX || 0);
+    // Invertir signo: en Three.js con frontal en +Z, rotación negativa en X apunta hacia arriba (uphill)
+    kartGroup.rotation.x = -(state.kartPitch || 0) + (state.stuntRotX || 0);
 
-    // Inclinación lateral en drift o acrobacia
+    // Inclinación lateral en drift o giro suave (Roll en eje Z local)
+    const steerRoll = -state.steerAngle * 0.10;
     if (state.isDrifting) {
       const tiltDir = left ? -1 : right ? 1 : 0;
-      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, tiltDir * 0.18, 0.15) + (state.stuntRotZ || 0);
+      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, tiltDir * 0.20, 0.15) + (state.stuntRotZ || 0);
     } else {
-      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, 0, 0.1) + (state.stuntRotZ || 0);
+      kartGroup.rotation.z = THREE.MathUtils.lerp(kartGroup.rotation.z, steerRoll, 0.12) + (state.stuntRotZ || 0);
     }
 
     // ── Ruedas ──
@@ -2822,12 +3126,34 @@
     kartLight.intensity = state.powerActive ? 4 + Math.sin(Date.now() * 0.02) * 2 : 2;
 
     // ── Cámara ──
-    const camDist   = 10;
-    const camHeight = 5;
-    const camX = state.posX - Math.cos(state.angle) * camDist;
-    const camZ = state.posZ - Math.sin(state.angle) * camDist;
-    camera.position.lerp(new THREE.Vector3(camX, state.posY + camHeight, camZ), 0.08);
-    camera.lookAt(state.posX, state.posY + 1.5, state.posZ);
+    const camDist = 9.5;
+    // Elevar la cámara suavemente en subidas para mantener visión sobre la cima
+    const camSlopeOffset = Math.max(-0.8, (state.kartPitch || 0) * 2.6);
+    const camHeight = 4.8 + camSlopeOffset;
+    const headingX = Math.cos(state.angle);
+    const headingZ = Math.sin(state.angle);
+    const targetCamX = state.posX - headingX * camDist;
+    const targetCamZ = state.posZ - headingZ * camDist;
+    const targetCamY = state.posY + camHeight;
+
+    // Seguimiento horizontal suave y vertical rápido para no quedarse atrás en pendientes pronunciadas
+    camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetCamX, 0.10);
+    camera.position.z = THREE.MathUtils.lerp(camera.position.z, targetCamZ, 0.10);
+    camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetCamY, 0.18);
+
+    // Evitar que la cámara atraviese el terreno o la pista por debajo
+    const camTerrainY = getTerrainHeightAt(camera.position.x, camera.position.z);
+    if (camera.position.y < camTerrainY + 1.8) {
+      camera.position.y = camTerrainY + 1.8;
+    }
+
+    // Punto de mira adelantado (Look Ahead) que sigue la inclinación de la pista
+    const lookAheadDist = 4.5;
+    const lookPitchOffset = Math.sin(state.kartPitch || 0) * 3.0;
+    const lookX = state.posX + headingX * lookAheadDist;
+    const lookZ = state.posZ + headingZ * lookAheadDist;
+    const lookY = state.posY + 1.4 + lookPitchOffset;
+    camera.lookAt(lookX, lookY, lookZ);
 
     // ── HUD ──
     const kmh = Math.round(Math.abs(state.speed) * 190);
@@ -2996,15 +3322,14 @@
         p.mesh.scale.setScalar(1.0);
       }
       if (hudLap) hudLap.textContent = `VUELTA 1 / ${TOTAL_LAPS}`;
-      if (doLocalCountdown !== false) {
-        startLocalCountdown();
+      if (doLocalCountdown === true && !isSplitMode) {
+        startLocalCountdown(3);
       }
     },
+    startLocalCountdown,
+    cancelLocalCountdown,
     setCountdown(seconds) {
-      if (localCountdownTimer) {
-        clearInterval(localCountdownTimer);
-        localCountdownTimer = null;
-      }
+      cancelLocalCountdown();
       if (seconds > 0) {
         state.isLocked = true;
         showCountdownNum(seconds);
@@ -3078,8 +3403,8 @@
     startPoint: { x: startSample.x, z: startSample.z, angle: startAngle0 }
   };
 
-  // Iniciar conteo local al arrancar
-  startLocalCountdown();
+  // Inicializar kart bloqueado en la grilla sin iniciar conteo automático al cargar
+  state.isLocked = true;
 
   animate();
 })();

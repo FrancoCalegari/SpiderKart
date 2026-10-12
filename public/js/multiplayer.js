@@ -127,6 +127,7 @@
   const forcedPlayerName = urlParamsMulti.get('playerName');
   const hideMenuForce = urlParamsMulti.get('hideMenu') === '1';
   const isSplitModeMulti = urlParamsMulti.get('splitMode') === '1';
+  const splitPlayersParam = parseInt(urlParamsMulti.get('splitPlayers') || '2', 10);
 
   // En modo split ignoramos la sesión guardada para que cada iframe reciba
   // un pilotId único, evitando que el servidor los expulse por "reconexión".
@@ -155,9 +156,13 @@
 
   const btnExitRace = document.getElementById('btn-exit-race');
 
-  if (hideMenuForce && mainMenu) {
+  if ((hideMenuForce || isSplitModeMulti) && mainMenu) {
       mainMenu.style.display = 'none';
       window.sessionStorage.setItem('sk_hide_menu', '1');
+  }
+  if (isSplitModeMulti) {
+      const hudActionBar = document.getElementById('hud-action-bar');
+      if (hudActionBar) hudActionBar.style.display = 'none';
   }
 
   if (isSplitModeMulti && autoJoinRoom && session) {
@@ -182,6 +187,10 @@
   if (btnExitRace) {
       btnExitRace.addEventListener('click', () => {
           disconnect();
+          if (window.SpiderKart) {
+              if (window.SpiderKart.cancelLocalCountdown) window.SpiderKart.cancelLocalCountdown();
+              window.SpiderKart.lockAndReset(0);
+          }
           if (!hideMenuForce) {
               mainMenu.style.display = 'flex';
               mmButtons.style.display = 'flex';
@@ -200,7 +209,13 @@
       btnBestLap.addEventListener('click', () => {
           mainMenu.style.display = 'none';
           window.sessionStorage.setItem('sk_hide_menu', '1');
-          startLocalTimeTrial();
+          if (typeof window.showModeLoading === 'function') {
+              window.showModeLoading('PREPARANDO CIRCUITO Y CARRERA...', () => {
+                  startLocalTimeTrial();
+              });
+          } else {
+              startLocalTimeTrial();
+          }
       });
   }
 
@@ -232,7 +247,13 @@
           if (rName.length > 0) {
               mainMenu.style.display = 'none';
               window.sessionStorage.setItem('sk_hide_menu', '1');
-              connect(rName, session.name);
+              if (typeof window.showModeLoading === 'function') {
+                  window.showModeLoading('CREANDO SALA ' + rName + '...', () => {
+                      connect(rName, session.name);
+                  });
+              } else {
+                  connect(rName, session.name);
+              }
           }
       });
   }
@@ -277,7 +298,13 @@
                   btn.onclick = () => {
                       mainMenu.style.display = 'none';
                       window.sessionStorage.setItem('sk_hide_menu', '1');
-                      connect(r.name, session.name);
+                      if (typeof window.showModeLoading === 'function') {
+                          window.showModeLoading('UNIÉNDOSE A SALA ' + r.name + '...', () => {
+                              connect(r.name, session.name);
+                          });
+                      } else {
+                          connect(r.name, session.name);
+                      }
                   };
               }
 
@@ -290,20 +317,32 @@
       }
   }
 
+  let localPollInterval = null;
+
   function startLocalTimeTrial() {
       // Bypassea la lógica multiplayer e inicia una carrera local
       room = null;
       playerId = session ? session.pilotId : ('pilot_' + Math.random().toString(36).slice(2,10));
       players[playerId] = { name: session ? session.name : 'Tú', color: '#00ff66', ready: true };
-      race.phase = 'racing';
-      race.startedAt = Date.now();
+      race.phase = 'countdown';
+      race.finished = false;
+      race.startedAt = performance.now();
       
-      const evt = new CustomEvent('spiderkart:start', { detail: { isMultiplayer: false, laps: DEFAULT_LAPS } });
-      window.dispatchEvent(evt);
-      if (window.SpiderKart) { window.SpiderKart.resetRace(); }
+      if (window.SpiderKart) {
+        window.SpiderKart.lockAndReset(0);
+        window.SpiderKart.resetRace(true);
+      }
       
-      startStateBroadcast();
-      startLapPoll();
+      if (localPollInterval) clearInterval(localPollInterval);
+      localPollInterval = setInterval(() => {
+        if (!window.SpiderKart) return;
+        const localState = window.SpiderKart.getLocalState();
+        checkLocalFinish(localState);
+        if (race.finished) {
+          clearInterval(localPollInterval);
+          localPollInterval = null;
+        }
+      }, 200);
   }
 
 
@@ -346,9 +385,13 @@
     ws.on('connect', () => {
       retries = 0;
       setStatus('CONECTADO — SALA ' + room, true);
-      ws.emit('message', {
+      const joinPayload = {
         type: 'join', room, name, pilotId: session ? session.pilotId : null
-      });
+      };
+      if (isSplitModeMulti) {
+        joinPayload.splitPlayers = splitPlayersParam;
+      }
+      ws.emit('message', joinPayload);
 
       if (stateInterval) clearInterval(stateInterval);
       stateInterval = setInterval(() => {
@@ -456,6 +499,11 @@
     switch (msg.type) {
       case 'joined':
         playerId = msg.playerId;
+        const lsScreenJoined = document.getElementById('loading-screen');
+        if (lsScreenJoined && lsScreenJoined.style.display !== 'none') {
+          lsScreenJoined.style.opacity = '0';
+          setTimeout(() => { lsScreenJoined.style.display = 'none'; }, 250);
+        }
         (msg.players || []).forEach(p => {
           players[p.id] = { name: p.name, color: p.color, ready: !!p.ready };
         });
@@ -502,7 +550,14 @@
       case 'countdown':
         race.phase = 'countdown';
         setRaceStatus('¡LARGADA EN ' + msg.seconds + '…!');
+        const lsScreenCd = document.getElementById('loading-screen');
+        if (lsScreenCd && lsScreenCd.style.display !== 'none') {
+          lsScreenCd.style.display = 'none';
+        }
         if (window.SpiderKart) {
+          if (window.SpiderKart.cancelLocalCountdown) {
+            window.SpiderKart.cancelLocalCountdown();
+          }
           if (msg.players) {
             const me = msg.players.find(p => p.id === playerId);
             const myPos = me ? (me.startPosition || 0) : 0;
@@ -632,7 +687,7 @@
 
   function disconnect() {
     if (stateInterval) { clearInterval(stateInterval); stateInterval = null; }
-    if (lapPollInterval) { clearInterval(lapPollInterval); lapPollInterval = null; }
+    if (localPollInterval) { clearInterval(localPollInterval); localPollInterval = null; }
     if (ws) {
       try { ws.emit('message', { type: 'leave' }); ws.disconnect(); } catch (e) { /* noop */ }
     }

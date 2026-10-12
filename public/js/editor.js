@@ -15,7 +15,17 @@
   let editorRamps = [];     // [{ sampleIdx, lane, type }]
   let editorPowerups = [];  // [{ sampleIdx, lane, type }]
   let editorShortcuts = []; // [{ startSampleIdx, endSampleIdx, halfWidth, controlPoints: [[x,y,z],...] }]
-  let editorTerrainNodes = []; // [{ x, z, height, radius, type }]
+  let editorTerrainNodes = []; // [{ x, z, height, radius, type, hasHole, holeWidth, holeHeight, holeAngle }]
+  let selectedTerrainIdx = -1;
+  const MIN_ELEMENT_DIAMETER_PX = 150;
+  const MIN_ELEMENT_RADIUS_PX = MIN_ELEMENT_DIAMETER_PX / 2; // 75px (garantiza diametro >= 150px al hacer zoom out)
+  let hoverTerrainIdx = -1;
+  let isRotatingTunnel = false;
+  let mouseScreenPos = { x: 0, y: 0 };
+  let mouseInCanvas = false;
+  let viewMode = '2d'; // '2d' | '3d' | 'split'
+  let editor3D = null;
+  let editor3DNeedsSync = false;
   let editorBarriers = []; // [{ start: {x, z}, end: {x, z} }]
   let trackWidth = 14;
   let totalLaps = 3;
@@ -32,9 +42,12 @@
   let selectedObsIdx = -1;   // índice en editorObstacles
   let selectedRampIdx = -1;  // índice en editorRamps
   let selectedPowerupIdx = -1; // índice en editorPowerups
+  let selectedShortcutIdx = -1; // índice en editorShortcuts
+  let selectedShortcutPoint = null; // { type: 'start' | 'end' | 'cp', cpIdx: 0 }
+  let hoverShortcutPoint = null; // { sIdx, type: 'start' | 'end' | 'cp', cpIdx: 0 }
   let dragging = false;
   let dragIdx = -1;
-  let dragType = null; // 'point' | 'obs' | 'ramp' | 'pu'
+  let dragType = null; // 'point' | 'obs' | 'ramp' | 'pu' | 'terrain' | 'tunnel-rotate' | 'shortcut-cp' | 'shortcut-start' | 'shortcut-end'
   let shortcutDraft = null; // { startSampleIdx, controlPoints: [] }
   let barrierDraft = null; // { x, z } (punto inicial)
 
@@ -68,18 +81,22 @@
   // ────────────────────────────────────────────────────
   //  Login
   // ────────────────────────────────────────────────────
-  const loginScreen    = document.getElementById('login-screen');
+  const loginScreen     = document.getElementById('login-screen');
   const loginTokenInput = document.getElementById('login-token');
-  const loginBtn       = document.getElementById('login-btn');
-  const loginError     = document.getElementById('login-error');
-  const editorScreen   = document.getElementById('editor-screen');
+  const loginBtn        = document.getElementById('login-btn');
+  const loginError      = document.getElementById('login-error');
+  const editorScreen    = document.getElementById('editor-screen');
+  const btnLogout       = document.getElementById('btn-logout');
 
-  async function doLogin() {
-    const token = loginTokenInput.value.trim();
-    if (!token) { loginError.textContent = 'Escribe el token.'; return; }
+  const STORAGE_KEY = 'spiderkart_admin_token';
+
+  async function doLogin(tokenToTry) {
+    const token = (tokenToTry || loginTokenInput.value || '').trim();
+    if (!token) { showLoginError('Escribe el token.'); return; }
 
     loginBtn.disabled = true;
     loginBtn.innerHTML = '<i class="fa fa-circle-notch fa-spin"></i> Verificando...';
+    loginError.classList.add('hidden');
 
     try {
       const r = await fetch('/api/admin/login', {
@@ -90,10 +107,12 @@
       const data = await r.json();
       if (data.ok) {
         adminToken = token;
+        sessionStorage.setItem(STORAGE_KEY, token);
         loginScreen.classList.add('hidden');
         editorScreen.classList.remove('hidden');
-        initEditor();
+        await initEditor();
       } else {
+        sessionStorage.removeItem(STORAGE_KEY);
         showLoginError(data.error || 'Token incorrecto.');
       }
     } catch (e) {
@@ -104,23 +123,62 @@
     }
   }
 
+  function doLogout() {
+    adminToken = '';
+    sessionStorage.removeItem(STORAGE_KEY);
+    if (window.location.search) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    editorScreen.classList.add('hidden');
+    loginScreen.classList.remove('hidden');
+    loginTokenInput.value = '';
+    loginError.classList.add('hidden');
+  }
+
   function showLoginError(msg) {
     loginError.textContent = msg;
     loginError.classList.remove('hidden');
   }
 
-  loginBtn.addEventListener('click', doLogin);
+  loginBtn.addEventListener('click', () => doLogin());
   loginTokenInput.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  if (btnLogout) {
+    btnLogout.addEventListener('click', doLogout);
+  }
+
+  function checkAutoLogin() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const tokenFromUrl = urlParams.get('token');
+    const tokenFromStorage = sessionStorage.getItem(STORAGE_KEY);
+
+    if (tokenFromUrl) {
+      loginTokenInput.value = tokenFromUrl;
+      doLogin(tokenFromUrl);
+    } else if (tokenFromStorage) {
+      loginTokenInput.value = tokenFromStorage;
+      doLogin(tokenFromStorage);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', checkAutoLogin);
+  } else {
+    checkAutoLogin();
+  }
 
   // ────────────────────────────────────────────────────
   //  Inicialización del editor
   // ────────────────────────────────────────────────────
+  let editorInitialized = false;
   async function initEditor() {
     resizeCanvas();
     resetViewport();
     await loadFromServer();
     pushHistory(); // estado inicial en la pila
-    bindUI();
+    if (!editorInitialized) {
+      bindUI();
+      editorInitialized = true;
+    }
     render();
     setStatus('info', 'Editor listo. Herramienta activa: Mover');
   }
@@ -392,9 +450,200 @@
     document.getElementById('btn-clear-terrain').addEventListener('click', () => {
       if (!confirm('¿Eliminar todo el terreno?')) return;
       editorTerrainNodes = [];
+      updateTerrainCount();
       render(); pushHistory();
       setStatus('info', 'Terreno limpiado.');
     });
+
+    // ── Conmutador de Vistas 2D / 3D / Split ──
+    const btnView2d = document.getElementById('btn-view-2d');
+    const btnView3d = document.getElementById('btn-view-3d');
+    const btnViewSplit = document.getElementById('btn-view-split');
+    const btnCamReset = document.getElementById('btn-cam-reset');
+    const btnCamTop = document.getElementById('btn-cam-top');
+    const btnCamTrack = document.getElementById('btn-cam-track');
+    const viewport3d = document.getElementById('viewport-3d');
+    const canvasArea = document.getElementById('canvas-area');
+
+    function setViewMode(mode) {
+      viewMode = mode;
+      if (btnView2d) btnView2d.classList.toggle('active', mode === '2d');
+      if (btnView3d) btnView3d.classList.toggle('active', mode === '3d');
+      if (btnViewSplit) btnViewSplit.classList.toggle('active', mode === 'split');
+
+      if (mode === '2d') {
+        canvasArea.classList.remove('split-view');
+        canvas.style.display = 'block';
+        if (viewport3d) viewport3d.classList.add('hidden');
+        resizeCanvas();
+        render();
+      } else if (mode === '3d') {
+        canvasArea.classList.remove('split-view');
+        canvas.style.display = 'none';
+        if (viewport3d) viewport3d.classList.remove('hidden');
+        initEditor3D();
+        if (editor3D) { editor3D.syncFrom2D(); editor3D.resize(); }
+      } else if (mode === 'split') {
+        canvasArea.classList.add('split-view');
+        canvas.style.display = 'block';
+        if (viewport3d) viewport3d.classList.remove('hidden');
+        resizeCanvas();
+        render();
+        initEditor3D();
+        if (editor3D) { editor3D.syncFrom2D(); editor3D.resize(); }
+      }
+    }
+
+    if (btnView2d) btnView2d.addEventListener('click', () => setViewMode('2d'));
+    if (btnView3d) btnView3d.addEventListener('click', () => setViewMode('3d'));
+    if (btnViewSplit) btnViewSplit.addEventListener('click', () => setViewMode('split'));
+
+    if (btnCamReset) btnCamReset.addEventListener('click', () => { if (editor3D) editor3D.resetCamera(); });
+    if (btnCamTop) btnCamTop.addEventListener('click', () => { if (editor3D) editor3D.topCamera(); });
+    if (btnCamTrack) btnCamTrack.addEventListener('click', () => { if (editor3D) editor3D.trackCamera(); });
+
+    // Tecla V para alternar vistas rápidamente
+    window.addEventListener('keydown', (e) => {
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.key === 'v' || e.key === 'V') {
+        if (viewMode === '2d') setViewMode('3d');
+        else if (viewMode === '3d') setViewMode('split');
+        else setViewMode('2d');
+      }
+    });
+
+    // ── Controles de Terreno y Túnel ──
+    const terrainTypeSelect = document.getElementById('terrain-type');
+    const tunnelControls = document.getElementById('tunnel-controls');
+    const tunnelWidthInput = document.getElementById('tunnel-width');
+    const tunnelWidthVal = document.getElementById('tunnel-width-val');
+    const tunnelHeightInput = document.getElementById('tunnel-height');
+    const tunnelHeightVal = document.getElementById('tunnel-height-val');
+    const tunnelAngleInput = document.getElementById('tunnel-angle');
+    const tunnelAngleVal = document.getElementById('tunnel-angle-val');
+    const btnAlignTunnel = document.getElementById('btn-align-tunnel');
+
+    function updateTunnelControlsVisibility() {
+      const isTunnel = terrainTypeSelect && terrainTypeSelect.value === 'mountain_tunnel';
+      if (tunnelControls) tunnelControls.style.display = isTunnel ? 'block' : 'none';
+    }
+
+    function syncSidebarFromTerrainNode(node) {
+      if (!node) return;
+      const type = node.type || (node.hasHole ? 'mountain_tunnel' : 'mountain');
+      if (terrainTypeSelect) terrainTypeSelect.value = type;
+      updateTunnelControlsVisibility();
+
+      const hInput = document.getElementById('node-height');
+      const hVal = document.getElementById('node-height-val');
+      const rInput = document.getElementById('node-radius');
+      const rVal = document.getElementById('node-radius-val');
+
+      if (hInput) { hInput.value = node.height; if (hVal) hVal.textContent = node.height; }
+      if (rInput) { rInput.value = node.radius; if (rVal) rVal.textContent = node.radius; }
+
+      if (tunnelWidthInput && tunnelWidthVal) {
+        tunnelWidthInput.value = node.holeWidth || 22;
+        tunnelWidthVal.textContent = node.holeWidth || 22;
+      }
+      if (tunnelHeightInput && tunnelHeightVal) {
+        tunnelHeightInput.value = node.holeHeight || 16;
+        tunnelHeightVal.textContent = node.holeHeight || 16;
+      }
+      if (tunnelAngleInput && tunnelAngleVal) {
+        tunnelAngleInput.value = node.holeAngle || 0;
+        tunnelAngleVal.textContent = (node.holeAngle || 0) + '°';
+      }
+    }
+
+    if (terrainTypeSelect) {
+      terrainTypeSelect.addEventListener('change', () => {
+        updateTunnelControlsVisibility();
+        const type = terrainTypeSelect.value;
+        const hInput = document.getElementById('node-height');
+        const hVal = document.getElementById('node-height-val');
+        const rInput = document.getElementById('node-radius');
+        const rVal = document.getElementById('node-radius-val');
+
+        if (type === 'mountain_tunnel') {
+          if (hInput) { hInput.value = 45; if (hVal) hVal.textContent = 45; }
+          if (rInput) { rInput.value = 50; if (rVal) rVal.textContent = 50; }
+        } else if (type === 'mountain') {
+          if (hInput) { hInput.value = 55; if (hVal) hVal.textContent = 55; }
+          if (rInput) { rInput.value = 45; if (rVal) rVal.textContent = 45; }
+        } else if (type === 'hill') {
+          if (hInput) { hInput.value = 20; if (hVal) hVal.textContent = 20; }
+          if (rInput) { rInput.value = 40; if (rVal) rVal.textContent = 40; }
+        } else if (type === 'crater') {
+          if (hInput) { hInput.value = -25; if (hVal) hVal.textContent = -25; }
+          if (rInput) { rInput.value = 35; if (rVal) rVal.textContent = 35; }
+        }
+
+        if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+          const node = editorTerrainNodes[selectedTerrainIdx];
+          node.type = type;
+          node.hasHole = (type === 'mountain_tunnel');
+          node.height = parseInt(hInput ? hInput.value : 45) || 45;
+          node.radius = parseInt(rInput ? rInput.value : 50) || 50;
+          editor3DNeedsSync = true; sync3DIfNeeded();
+          render(); pushHistory();
+        }
+      });
+      updateTunnelControlsVisibility();
+    }
+
+    if (tunnelWidthInput && tunnelWidthVal) {
+      tunnelWidthInput.addEventListener('input', e => {
+        tunnelWidthVal.textContent = e.target.value;
+        if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+          editorTerrainNodes[selectedTerrainIdx].holeWidth = parseInt(e.target.value) || 22;
+          editor3DNeedsSync = true; sync3DIfNeeded(); render();
+        }
+      });
+      tunnelWidthInput.addEventListener('change', () => { if (selectedTerrainIdx >= 0) pushHistory(); });
+    }
+    if (tunnelHeightInput && tunnelHeightVal) {
+      tunnelHeightInput.addEventListener('input', e => {
+        tunnelHeightVal.textContent = e.target.value;
+        if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+          editorTerrainNodes[selectedTerrainIdx].holeHeight = parseInt(e.target.value) || 16;
+          editor3DNeedsSync = true; sync3DIfNeeded(); render();
+        }
+      });
+      tunnelHeightInput.addEventListener('change', () => { if (selectedTerrainIdx >= 0) pushHistory(); });
+    }
+    if (tunnelAngleInput && tunnelAngleVal) {
+      tunnelAngleInput.addEventListener('input', e => {
+        tunnelAngleVal.textContent = e.target.value + '°';
+        if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+          editorTerrainNodes[selectedTerrainIdx].holeAngle = parseFloat(e.target.value) || 0;
+          editor3DNeedsSync = true; sync3DIfNeeded(); render();
+        }
+      });
+      tunnelAngleInput.addEventListener('change', () => { if (selectedTerrainIdx >= 0) pushHistory(); });
+    }
+
+    if (btnAlignTunnel) {
+      btnAlignTunnel.addEventListener('click', () => {
+        let tx = 0, tz = 0;
+        if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+          tx = editorTerrainNodes[selectedTerrainIdx].x;
+          tz = editorTerrainNodes[selectedTerrainIdx].z;
+        } else if (editorTerrainNodes.length > 0) {
+          const last = editorTerrainNodes[editorTerrainNodes.length - 1];
+          tx = last.x; tz = last.z;
+        }
+        const angle = getClosestTrackTangentAngle(tx, tz);
+        if (tunnelAngleInput) tunnelAngleInput.value = angle;
+        if (tunnelAngleVal) tunnelAngleVal.textContent = angle + '°';
+        if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+          editorTerrainNodes[selectedTerrainIdx].holeAngle = angle;
+          editor3DNeedsSync = true; sync3DIfNeeded();
+          render(); pushHistory();
+        }
+        setStatus('ok', `Túnel alineado a ${angle}° con la pista más cercana.`);
+      });
+    }
 
     document.getElementById('node-height').addEventListener('input', e => {
       const val = parseInt(e.target.value);
@@ -402,14 +651,26 @@
       if (tool === 'elevate' && selectedIdx >= 0) {
         controlPoints[selectedIdx].y = val;
         render();
+      } else if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+        editorTerrainNodes[selectedTerrainIdx].height = val;
+        editor3DNeedsSync = true; sync3DIfNeeded(); render();
       }
     });
     document.getElementById('node-height').addEventListener('change', () => {
       if (tool === 'elevate' && selectedIdx >= 0) pushHistory();
+      else if (selectedTerrainIdx >= 0) pushHistory();
     });
 
     document.getElementById('node-radius').addEventListener('input', e => {
-      document.getElementById('node-radius-val').textContent = e.target.value;
+      const val = parseInt(e.target.value) || 50;
+      document.getElementById('node-radius-val').textContent = val;
+      if (selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+        editorTerrainNodes[selectedTerrainIdx].radius = val;
+        editor3DNeedsSync = true; sync3DIfNeeded(); render();
+      }
+    });
+    document.getElementById('node-radius').addEventListener('change', () => {
+      if (selectedTerrainIdx >= 0) pushHistory();
     });
 
     // Acciones
@@ -588,7 +849,15 @@
     canvas.addEventListener('mousedown', onMouseDown);
     canvas.addEventListener('mousemove', onMouseMove);
     canvas.addEventListener('mouseup', onMouseUp);
-    canvas.addEventListener('mouseleave', onMouseUp);
+    canvas.addEventListener('mouseleave', () => {
+      mouseInCanvas = false;
+      hoverTerrainIdx = -1;
+      onMouseUp();
+      render();
+    });
+    canvas.addEventListener('mouseenter', () => {
+      mouseInCanvas = true;
+    });
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
@@ -610,12 +879,39 @@
 
       if (!inInput) {
         if (e.key === 'Delete') {
-          if (selectedObsIdx >= 0)    { editorObstacles.splice(selectedObsIdx, 1); selectedObsIdx = -1; updateObstacleCount(); render(); pushHistory(); return; }
-          if (selectedRampIdx >= 0)   { editorRamps.splice(selectedRampIdx, 1);    selectedRampIdx = -1; updateRampCount();    render(); pushHistory(); return; }
+          if (selectedObsIdx >= 0)     { editorObstacles.splice(selectedObsIdx, 1); selectedObsIdx = -1; updateObstacleCount(); render(); pushHistory(); return; }
+          if (selectedRampIdx >= 0)    { editorRamps.splice(selectedRampIdx, 1);    selectedRampIdx = -1; updateRampCount();    render(); pushHistory(); return; }
           if (selectedPowerupIdx >= 0) { editorPowerups.splice(selectedPowerupIdx,1); selectedPowerupIdx = -1; updatePowerupCount(); render(); pushHistory(); return; }
-          if (selectedIdx >= 0)       { removePoint(selectedIdx); pushHistory(); }
+          if (selectedTerrainIdx >= 0) {
+            editorTerrainNodes.splice(selectedTerrainIdx, 1);
+            selectedTerrainIdx = -1;
+            updateTerrainCount();
+            editor3DNeedsSync = true; sync3DIfNeeded();
+            render(); pushHistory(); return;
+          }
+          if (selectedShortcutIdx >= 0 && editorShortcuts[selectedShortcutIdx]) {
+            const sc = editorShortcuts[selectedShortcutIdx];
+            if (selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && sc.controlPoints.length > 1) {
+              sc.controlPoints.splice(selectedShortcutPoint.cpIdx, 1);
+              selectedShortcutPoint = null;
+              setStatus('info', 'Punto de control del atajo eliminado.');
+            } else {
+              editorShortcuts.splice(selectedShortcutIdx, 1);
+              selectedShortcutIdx = -1;
+              selectedShortcutPoint = null;
+              setStatus('info', 'Atajo eliminado.');
+            }
+            updateShortcutCount();
+            editor3DNeedsSync = true; sync3DIfNeeded();
+            render(); pushHistory(); return;
+          }
+          if (selectedIdx >= 0)        { removePoint(selectedIdx); pushHistory(); }
         }
-        if (e.key === 'Escape') { selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; hidePointInfo(); render(); }
+        if (e.key === 'Escape') {
+          selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
+          selectedShortcutIdx = -1; selectedShortcutPoint = null;
+          hidePointInfo(); render();
+        }
         if (e.key === 'a') setTool('add');
         if (e.key === 'm') setTool('move');
         if (e.key === 'd') setTool('delete');
@@ -649,7 +945,7 @@
       'terrain-add': 'Click para añadir montaña/hueco. Usá los sliders para configurar.',
       'terrain-delete': 'Click en el terreno para eliminarlo',
       'shortcut-add': 'Click 1: Inicio en pista. Clicks: Puntos intermedios. Doble Click en pista: Fin.',
-      'shortcut-delete': 'Click en un atajo para eliminarlo',
+      'shortcut-delete': 'Click en un atajo o en sus puntos para eliminarlo',
       'barrier-add': 'Click 1: Inicio de barrera. Click 2: Fin de barrera.',
       'barrier-delete': 'Click en una barrera para eliminarla'
     };
@@ -676,6 +972,10 @@
   function updatePowerupCount() {
     const el = document.getElementById('pu-count');
     if (el) el.textContent = `${editorPowerups.length} orbes`;
+  }
+  function updateShortcutCount() {
+    const el = document.getElementById('shortcut-count');
+    if (el) el.textContent = `${editorShortcuts.length} atajos`;
   }
 
   function updatePointCount() {
@@ -724,12 +1024,47 @@
 
   function pointRadius() { return Math.max(5, 8 / zoom); }
 
+  // Clamp adaptativo: NUNCA menos de 150px de diametro (75px de radio) al alejar el zoom
+  function getClampedScreenRadius(worldRadius) {
+    return Math.max(MIN_ELEMENT_RADIUS_PX, (worldRadius || 50) * zoom);
+  }
+
+  // Hit test para el tirador/knob de rotacion orbital del tunel seleccionado
+  function terrainRotationGizmoHitTest(mx, my) {
+    if (selectedTerrainIdx < 0 || !editorTerrainNodes[selectedTerrainIdx]) return false;
+    const node = editorTerrainNodes[selectedTerrainIdx];
+    if (node.type !== 'mountain_tunnel' && !node.hasHole) return false;
+    const sc = worldToCanvas(node.x, node.z);
+    const rCanvas = getClampedScreenRadius(node.radius);
+    const angleRad = ((node.holeAngle || 0) * Math.PI) / 180;
+    const knobDist = rCanvas + 18;
+    const knobX = sc.x + Math.cos(angleRad) * knobDist;
+    const knobY = sc.y + Math.sin(angleRad) * knobDist;
+    const dx = mx - knobX, dy = my - knobY;
+    return (dx * dx + dy * dy <= 16 * 16);
+  }
+
+  // Hit test sobre montañas y estructuras de terreno usando radio clamp >= 75px (diametro >= 150px)
+  function terrainHitTest(mx, my) {
+    for (let i = editorTerrainNodes.length - 1; i >= 0; i--) {
+      const node = editorTerrainNodes[i];
+      const sc = worldToCanvas(node.x, node.z);
+      const rCanvas = getClampedScreenRadius(node.radius);
+      const dx = mx - sc.x, dy = my - sc.y;
+      if (dx * dx + dy * dy <= rCanvas * rCanvas) return i;
+    }
+    return -1;
+  }
+
   function hitTest(mx, my) {
-    const r = pointRadius() + 4;
     for (let i = controlPoints.length - 1; i >= 0; i--) {
       const sc = worldToCanvas(controlPoints[i].x, controlPoints[i].z);
       const dx = mx - sc.x, dy = my - sc.y;
-      if (dx * dx + dy * dy <= r * r) return i;
+      // Si el punto está seleccionado, su halo interactivo es de mínimo 150px de diámetro (75px de radio)
+      const testR = (i === selectedIdx)
+        ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10)
+        : Math.max(10, pointRadius() + 5);
+      if (dx * dx + dy * dy <= testR * testR) return i;
     }
     return -1;
   }
@@ -780,6 +1115,104 @@
       if (ddx*ddx + ddy*ddy <= r2) return i;
     }
     return -1;
+  }
+
+  // ────────────────────────────────────────────────────
+  //  Geometría y detección de atajos (anclas + CPs)
+  // ────────────────────────────────────────────────────
+  function getShortcutGeometry(sc) {
+    if (!sc || !sc.controlPoints || sc.controlPoints.length === 0) return null;
+    if (controlPoints.length < 2) return null;
+    const startP = getTrackWorldPoint(sc.startSampleIdx);
+    const endP = getTrackWorldPoint(sc.endSampleIdx);
+    if (!startP || !endP) return null;
+
+    const hw = trackWidth;
+    const firstCP = sc.controlPoints[0];
+    const lastCP = sc.controlPoints[sc.controlPoints.length - 1];
+
+    const splineAll = buildSpline(controlPoints, true, 20);
+    const totalSp = splineAll.length;
+    const startIdx = Math.round((sc.startSampleIdx / 600) * (totalSp - 1));
+    const endIdx = Math.round((sc.endSampleIdx / 600) * (totalSp - 1));
+    const sp1 = splineAll[Math.max(0, startIdx - 1)];
+    const sp2 = splineAll[Math.min(totalSp - 1, startIdx + 1)];
+    const sp3 = splineAll[Math.max(0, endIdx - 1)];
+    const sp4 = splineAll[Math.min(totalSp - 1, endIdx + 1)];
+
+    const tanStartX = sp2.x - sp1.x, tanStartZ = sp2.z - sp1.z;
+    const tanStartLen = Math.sqrt(tanStartX*tanStartX + tanStartZ*tanStartZ) || 1;
+    const normStartX = -tanStartZ / tanStartLen, normStartZ = tanStartX / tanStartLen;
+
+    const tanEndX = sp4.x - sp3.x, tanEndZ = sp4.z - sp3.z;
+    const tanEndLen = Math.sqrt(tanEndX*tanEndX + tanEndZ*tanEndZ) || 1;
+    const normEndX = -tanEndZ / tanEndLen, normEndZ = tanEndX / tanEndLen;
+
+    const toFirstX = firstCP[0] - startP.x, toFirstZ = firstCP[2] - startP.z;
+    const sideStart = (toFirstX * normStartX + toFirstZ * normStartZ) >= 0 ? 1 : -1;
+
+    const toEndX = endP.x - lastCP[0], toEndZ = endP.z - lastCP[2];
+    const sideEnd = (toEndX * normEndX + toEndZ * normEndZ) >= 0 ? 1 : -1;
+
+    const anchorStart = { x: startP.x + normStartX * hw * sideStart, z: startP.z + normStartZ * hw * sideStart };
+    const anchorEnd   = { x: endP.x   + normEndX   * hw * sideEnd,   z: endP.z   + normEndZ   * hw * sideEnd   };
+
+    const pts = [anchorStart, ...sc.controlPoints.map(p => ({ x: p[0], z: p[2] })), anchorEnd];
+    const scSpline = buildSpline(pts, false, 15);
+
+    return { startP, endP, anchorStart, anchorEnd, pts, scSpline };
+  }
+
+  function shortcutHitTest(mx, my) {
+    for (let sIdx = editorShortcuts.length - 1; sIdx >= 0; sIdx--) {
+      const sc = editorShortcuts[sIdx];
+      const geom = getShortcutGeometry(sc);
+      if (!geom) continue;
+
+      const isShortcutSelected = (sIdx === selectedShortcutIdx);
+
+      // 1. Puntos de control intermedios (CP)
+      for (let cpIdx = sc.controlPoints.length - 1; cpIdx >= 0; cpIdx--) {
+        const pt = sc.controlPoints[cpIdx];
+        const scPos = worldToCanvas(pt[0], pt[2]);
+        const dx = mx - scPos.x, dy = my - scPos.y;
+        const isPtSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && selectedShortcutPoint.cpIdx === cpIdx;
+        const hitR = isPtSelected ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10) : Math.max(14, 10 / zoom);
+        if (dx * dx + dy * dy <= hitR * hitR) {
+          return { sIdx, type: 'cp', cpIdx, x: pt[0], z: pt[2] };
+        }
+      }
+
+      // 2. Ancla de inicio (start)
+      const scStart = worldToCanvas(geom.anchorStart.x, geom.anchorStart.z);
+      const dxStart = mx - scStart.x, dyStart = my - scStart.y;
+      const isStartSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'start';
+      const hitRStart = isStartSelected ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10) : Math.max(16, 11 / zoom);
+      if (dxStart * dxStart + dyStart * dyStart <= hitRStart * hitRStart) {
+        return { sIdx, type: 'start', cpIdx: -1, x: geom.anchorStart.x, z: geom.anchorStart.z };
+      }
+
+      // 3. Ancla de fin (end)
+      const scEnd = worldToCanvas(geom.anchorEnd.x, geom.anchorEnd.z);
+      const dxEnd = mx - scEnd.x, dyEnd = my - scEnd.y;
+      const isEndSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'end';
+      const hitREnd = isEndSelected ? Math.max(MIN_ELEMENT_RADIUS_PX, pointRadius() + 10) : Math.max(16, 11 / zoom);
+      if (dxEnd * dxEnd + dyEnd * dyEnd <= hitREnd * hitREnd) {
+        return { sIdx, type: 'end', cpIdx: -1, x: geom.anchorEnd.x, z: geom.anchorEnd.z };
+      }
+
+      // 4. Curva del atajo
+      if (geom.scSpline) {
+        for (const sp of geom.scSpline) {
+          const scP = worldToCanvas(sp.x, sp.z);
+          const d2 = (mx - scP.x)**2 + (my - scP.y)**2;
+          if (d2 <= (Math.max(12, 16 / zoom))**2) {
+            return { sIdx, type: 'curve', cpIdx: -1, x: sp.x, z: sp.z };
+          }
+        }
+      }
+    }
+    return null;
   }
 
   // ────────────────────────────────────────────────────
@@ -917,32 +1350,72 @@
     }
 
     if (tool === 'shortcut-delete') {
-      // Simplificado: limpiar todos si hace click, o usar el boton
-      setStatus('info', 'Para borrar atajos, usá el botón "Limpiar atajos".');
+      const hitSc = shortcutHitTest(mx, my);
+      if (hitSc) {
+        editorShortcuts.splice(hitSc.sIdx, 1);
+        if (selectedShortcutIdx === hitSc.sIdx) {
+          selectedShortcutIdx = -1;
+          selectedShortcutPoint = null;
+        } else if (selectedShortcutIdx > hitSc.sIdx) {
+          selectedShortcutIdx--;
+        }
+        updateShortcutCount();
+        editor3DNeedsSync = true; sync3DIfNeeded();
+        render(); pushHistory();
+        setStatus('ok', 'Atajo eliminado.');
+      } else {
+        setStatus('info', 'Hacé click sobre cualquier atajo o sus anclas para eliminarlo.');
+      }
       return;
     }
 
     if (tool === 'terrain-add') {
       const w = canvasToWorld(mx, my);
-      const h = parseInt(document.getElementById('node-height').value) || 10;
-      const r = parseInt(document.getElementById('node-radius').value) || 40;
-      editorTerrainNodes.push({ x: Math.round(w.x), z: Math.round(w.z), height: h, radius: r, type: h >= 0 ? 'hill' : 'hole' });
+      const type = (document.getElementById('terrain-type') && document.getElementById('terrain-type').value) || 'mountain_tunnel';
+      const h = parseInt(document.getElementById('node-height').value) || (type === 'crater' ? -25 : 45);
+      const r = parseInt(document.getElementById('node-radius').value) || 50;
+      const isTunnel = (type === 'mountain_tunnel');
+      const tunnelWidth = isTunnel ? (parseInt(document.getElementById('tunnel-width').value) || 22) : 0;
+      const tunnelHeight = isTunnel ? (parseInt(document.getElementById('tunnel-height').value) || 16) : 0;
+      let tunnelAngle = isTunnel ? (parseFloat(document.getElementById('tunnel-angle').value) || 0) : 0;
+
+      // Si es túnel y ángulo es 0, alinear automáticamente a la pista
+      if (isTunnel && tunnelAngle === 0) {
+        tunnelAngle = getClosestTrackTangentAngle(w.x, w.z);
+        const aInput = document.getElementById('tunnel-angle');
+        const aVal = document.getElementById('tunnel-angle-val');
+        if (aInput) aInput.value = tunnelAngle;
+        if (aVal) aVal.textContent = tunnelAngle + '°';
+      }
+
+      editorTerrainNodes.push({
+        x: Math.round(w.x),
+        z: Math.round(w.z),
+        height: h,
+        radius: r,
+        type: type,
+        hasHole: isTunnel,
+        holeWidth: tunnelWidth,
+        holeHeight: tunnelHeight,
+        holeAngle: tunnelAngle
+      });
+      selectedTerrainIdx = editorTerrainNodes.length - 1;
+      updateTerrainCount();
       render(); pushHistory();
-      setStatus('ok', 'Terreno añadido.');
+      setStatus('ok', isTunnel ? `Montaña con túnel añadida (${tunnelAngle}°).` : 'Estructura de terreno añadida.');
       return;
     }
 
     if (tool === 'terrain-delete') {
-      const w = canvasToWorld(mx, my);
-      let bestIdx = -1, bestDist = Infinity;
-      editorTerrainNodes.forEach((node, i) => {
-        const d = (node.x - w.x)**2 + (node.z - w.z)**2;
-        if (d < bestDist && d < node.radius*node.radius) { bestIdx = i; bestDist = d; }
-      });
+      const bestIdx = terrainHitTest(mx, my);
       if (bestIdx >= 0) {
         editorTerrainNodes.splice(bestIdx, 1);
+        if (selectedTerrainIdx === bestIdx) selectedTerrainIdx = -1;
+        else if (selectedTerrainIdx > bestIdx) selectedTerrainIdx--;
+        updateTerrainCount();
+        editor3DNeedsSync = true; sync3DIfNeeded();
         render(); pushHistory();
-        setStatus('ok', 'Terreno eliminado.');
+        setStatus('ok', 'Estructura de terreno eliminada.');
       }
       return;
     }
@@ -989,23 +1462,55 @@
     }
 
     // move (default)
-    // Prioridad: powerups > obstáculos/rampas > puntos de control
+    // 0. Si hay un túnel seleccionado, chequear tirador orbital de rotación directa
+    if (terrainRotationGizmoHitTest(mx, my)) {
+      isRotatingTunnel = true;
+      dragging = true;
+      dragType = 'tunnel-rotate';
+      canvas.style.cursor = 'crosshair';
+      render();
+      return;
+    }
+
+    // Prioridad: atajos (anclas y puntos) > powerups > obstáculos/rampas > puntos de control > montañas
+    const hitSc = shortcutHitTest(mx, my);
+    if (hitSc) {
+      selectedShortcutIdx = hitSc.sIdx;
+      selectedShortcutPoint = { type: hitSc.type, cpIdx: hitSc.cpIdx };
+      selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
+      dragging = true;
+      dragIdx = hitSc.sIdx;
+      if (hitSc.type === 'start') dragType = 'shortcut-start';
+      else if (hitSc.type === 'end') dragType = 'shortcut-end';
+      else if (hitSc.type === 'cp') dragType = 'shortcut-cp';
+      else dragType = 'shortcut-curve';
+      canvas.style.cursor = 'grabbing';
+      hidePointInfo();
+      const ptDesc = hitSc.type === 'start' ? 'Ancla de inicio ⚓' : hitSc.type === 'end' ? 'Ancla de fin 🎯' : hitSc.type === 'cp' ? `Punto de control CP#${hitSc.cpIdx + 1}` : 'Atajo';
+      setStatus('ok', `${ptDesc} del Atajo #${hitSc.sIdx + 1} seleccionado. Arrastralo para reposicionar.`);
+      render();
+      return;
+    }
+
     if (spline) {
       const puIdx = overlayHitTest(mx, my, editorPowerups, spline);
       if (puIdx >= 0) {
-        selectedPowerupIdx = puIdx; selectedObsIdx = -1; selectedRampIdx = -1; selectedIdx = -1;
+        selectedPowerupIdx = puIdx; selectedObsIdx = -1; selectedRampIdx = -1; selectedIdx = -1; selectedTerrainIdx = -1;
+        selectedShortcutIdx = -1; selectedShortcutPoint = null;
         dragging = true; dragIdx = puIdx; dragType = 'pu';
         canvas.style.cursor = 'grabbing'; hidePointInfo(); render(); return;
       }
       const obsIdx = overlayHitTest(mx, my, editorObstacles, spline);
       if (obsIdx >= 0) {
-        selectedObsIdx = obsIdx; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedIdx = -1;
+        selectedObsIdx = obsIdx; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedIdx = -1; selectedTerrainIdx = -1;
+        selectedShortcutIdx = -1; selectedShortcutPoint = null;
         dragging = true; dragIdx = obsIdx; dragType = 'obs';
         canvas.style.cursor = 'grabbing'; hidePointInfo(); render(); return;
       }
       const rampIdx = overlayHitTest(mx, my, editorRamps, spline);
       if (rampIdx >= 0) {
-        selectedRampIdx = rampIdx; selectedObsIdx = -1; selectedPowerupIdx = -1; selectedIdx = -1;
+        selectedRampIdx = rampIdx; selectedObsIdx = -1; selectedPowerupIdx = -1; selectedIdx = -1; selectedTerrainIdx = -1;
+        selectedShortcutIdx = -1; selectedShortcutPoint = null;
         dragging = true; dragIdx = rampIdx; dragType = 'ramp';
         canvas.style.cursor = 'grabbing'; hidePointInfo(); render(); return;
       }
@@ -1014,20 +1519,43 @@
     const idx = hitTest(mx, my);
     if (idx >= 0) {
       dragging = true; dragIdx = idx; selectedIdx = idx; dragType = 'point';
-      selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1;
+      selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
+      selectedShortcutIdx = -1; selectedShortcutPoint = null;
       canvas.style.cursor = 'grabbing';
       showPointInfo(idx); render();
-    } else {
-      selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1;
-      hidePointInfo();
-      isPanning = true;
-      panStart = { mx, my, px: panX, py: panY };
-      canvas.style.cursor = 'grabbing'; render();
+      return;
     }
+
+    // Selección y arrastre de montañas en modo move con zona clamp >= 150px
+    const tHit = terrainHitTest(mx, my);
+    if (tHit >= 0) {
+      selectedTerrainIdx = tHit;
+      selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1;
+      selectedShortcutIdx = -1; selectedShortcutPoint = null;
+      dragging = true; dragIdx = tHit; dragType = 'terrain';
+      syncSidebarFromTerrainNode(editorTerrainNodes[tHit]);
+      canvas.style.cursor = 'grabbing';
+      hidePointInfo();
+      setStatus('ok', `Montaña #${tHit + 1} seleccionada (Ø min 150px). Podés moverla o rotar el túnel.`);
+      render();
+      return;
+    }
+
+    // Clic en vacío: deseleccionar y paneo
+    selectedIdx = -1; selectedObsIdx = -1; selectedRampIdx = -1; selectedPowerupIdx = -1; selectedTerrainIdx = -1;
+    selectedShortcutIdx = -1; selectedShortcutPoint = null;
+    hidePointInfo();
+    isPanning = true;
+    panStart = { mx, my, px: panX, py: panY };
+    canvas.style.cursor = 'grabbing'; render();
   }
 
   function onMouseMove(e) {
     const mx = e.offsetX, my = e.offsetY;
+    mouseScreenPos.x = mx;
+    mouseScreenPos.y = my;
+    mouseInCanvas = true;
+
     if (isPanning) {
       panX = panStart.px + (mx - panStart.mx);
       panY = panStart.py + (my - panStart.my);
@@ -1039,6 +1567,44 @@
         controlPoints[dragIdx].x = Math.round(w.x);
         controlPoints[dragIdx].z = Math.round(w.z);
         showPointInfo(dragIdx);
+      } else if (dragType === 'terrain') {
+        const w = canvasToWorld(mx, my);
+        editorTerrainNodes[dragIdx].x = Math.round(w.x);
+        editorTerrainNodes[dragIdx].z = Math.round(w.z);
+        editor3DNeedsSync = true;
+      } else if (dragType === 'tunnel-rotate' && selectedTerrainIdx >= 0 && editorTerrainNodes[selectedTerrainIdx]) {
+        const node = editorTerrainNodes[selectedTerrainIdx];
+        const sc = worldToCanvas(node.x, node.z);
+        let deg = Math.round(Math.atan2(my - sc.y, mx - sc.x) * (180 / Math.PI));
+        if (deg < 0) deg += 360;
+        node.holeAngle = deg;
+        const aInput = document.getElementById('tunnel-angle');
+        const aVal = document.getElementById('tunnel-angle-val');
+        if (aInput) aInput.value = deg;
+        if (aVal) aVal.textContent = deg + '°';
+        editor3DNeedsSync = true;
+      } else if (dragType === 'shortcut-cp' && selectedShortcutPoint && selectedShortcutPoint.type === 'cp') {
+        const sc = editorShortcuts[dragIdx];
+        if (sc && sc.controlPoints[selectedShortcutPoint.cpIdx]) {
+          const w = canvasToWorld(mx, my);
+          sc.controlPoints[selectedShortcutPoint.cpIdx][0] = Math.round(w.x);
+          sc.controlPoints[selectedShortcutPoint.cpIdx][2] = Math.round(w.z);
+          editor3DNeedsSync = true;
+        }
+      } else if (dragType === 'shortcut-start') {
+        const sc = editorShortcuts[dragIdx];
+        const hitTrack = splineHitTest(mx, my);
+        if (sc && hitTrack) {
+          sc.startSampleIdx = hitTrack.sampleIdx;
+          editor3DNeedsSync = true;
+        }
+      } else if (dragType === 'shortcut-end') {
+        const sc = editorShortcuts[dragIdx];
+        const hitTrack = splineHitTest(mx, my);
+        if (sc && hitTrack) {
+          sc.endSampleIdx = hitTrack.sampleIdx;
+          editor3DNeedsSync = true;
+        }
       } else if ((['obs','ramp','pu'].includes(dragType)) && controlPoints.length >= 2) {
         const spline = buildSpline(controlPoints, true, 20);
         const hit = splineHitTest(mx, my);
@@ -1049,18 +1615,44 @@
         }
       }
       render();
+      return;
+    }
+
+    // Detección de hover y cursor contextual
+    hoverTerrainIdx = terrainHitTest(mx, my);
+    hoverShortcutPoint = shortcutHitTest(mx, my);
+    if (tool === 'move') {
+      if (terrainRotationGizmoHitTest(mx, my)) {
+        canvas.style.cursor = 'crosshair';
+      } else if (hoverShortcutPoint) {
+        canvas.style.cursor = 'pointer';
+      } else if (hoverTerrainIdx >= 0 || hitTest(mx, my) >= 0) {
+        canvas.style.cursor = 'pointer';
+      } else {
+        canvas.style.cursor = 'grab';
+      }
+    }
+
+    // Redibujar en tiempo real para placement ghost y hover
+    if (['terrain-add', 'shortcut-add', 'add', 'move', 'terrain-delete', 'shortcut-delete'].includes(tool)) {
+      render();
     }
   }
 
   function onMouseUp(e) {
     if (isPanning) {
       isPanning = false;
-      const curs = ['add','obs-add','ramp-add','pu-add'].includes(tool) ? 'crosshair'
-                 : ['delete','obs-delete','ramp-delete','pu-delete'].includes(tool) ? 'not-allowed' : 'grab';
+      const curs = ['add','obs-add','ramp-add','pu-add','terrain-add','shortcut-add','barrier-add'].includes(tool) ? 'crosshair'
+                 : ['delete','obs-delete','ramp-delete','pu-delete','terrain-delete','shortcut-delete','barrier-delete'].includes(tool) ? 'not-allowed' : 'grab';
       canvas.style.cursor = curs;
     }
     if (dragging) { 
-      dragging = false; dragIdx = -1; dragType = null; canvas.style.cursor = 'grab'; 
+      if (dragType === 'terrain' || dragType === 'tunnel-rotate' || dragType === 'shortcut-cp' || dragType === 'shortcut-start' || dragType === 'shortcut-end') {
+        editor3DNeedsSync = true;
+        sync3DIfNeeded();
+      }
+      dragging = false; dragIdx = -1; dragType = null; isRotatingTunnel = false;
+      canvas.style.cursor = 'grab'; 
       pushHistory();
     }
   }
@@ -1142,7 +1734,15 @@
     }
 
     drawGrid();
-    if (controlPoints.length < 2) { drawNoPointsHint(); return; }
+    if (controlPoints.length < 2) {
+      drawTerrainNodes();
+      drawBarriers();
+      drawPoints();
+      drawPlacementGhost();
+      drawNoPointsHint();
+      sync3DIfNeeded();
+      return;
+    }
     const spline = buildSpline(controlPoints, true, 20);
     drawTrackFill(spline);
     // Atajos se dibujan ANTES de la línea roja para que queden debajo
@@ -1165,6 +1765,8 @@
     drawTerrainNodes();
     drawBarriers();
     drawPoints();
+    drawPlacementGhost();
+    sync3DIfNeeded();
   }
 
   function drawBarriers() {
@@ -1188,64 +1790,228 @@
   }
 
   function drawShortcuts() {
-    // Dibujar atajos terminados
-    ctx.lineWidth = Math.max(1, 4 / zoom);
-    ctx.strokeStyle = '#006699';
-    for (const sc of editorShortcuts) {
-      if (!sc.controlPoints || sc.controlPoints.length === 0) continue;
-      const startP = getTrackWorldPoint(sc.startSampleIdx);
-      const endP   = getTrackWorldPoint(sc.endSampleIdx);
-      if (!startP || !endP) continue;
+    updateShortcutCount();
 
-      // Calcular la normal del punto de inicio/fin para anclar al borde de la pista
-      // (igual que hace game-engine.js) usando trackWidth como mitad del ancho
-      const hw = trackWidth; // unidades editor ≈ HALF_WIDTH del motor
-      const firstCP = sc.controlPoints[0];
-      const lastCP  = sc.controlPoints[sc.controlPoints.length - 1];
+    // Dibujar atajos terminados con sus anclas y puntos de control interactivos
+    for (let sIdx = 0; sIdx < editorShortcuts.length; sIdx++) {
+      const sc = editorShortcuts[sIdx];
+      const geom = getShortcutGeometry(sc);
+      if (!geom) continue;
 
-      // Normal del inicio: perpendicular de la spline en ese punto
-      // Aproximar la normal como perpendicular al vector tangente al punto de inicio
-      const splineAll = buildSpline(controlPoints, true, 20);
-      const totalSp = splineAll.length;
-      const startIdx = Math.round((sc.startSampleIdx / 600) * (totalSp - 1));
-      const endIdx   = Math.round((sc.endSampleIdx   / 600) * (totalSp - 1));
-      const sp1 = splineAll[Math.max(0, startIdx - 1)];
-      const sp2 = splineAll[Math.min(totalSp - 1, startIdx + 1)];
-      const sp3 = splineAll[Math.max(0, endIdx - 1)];
-      const sp4 = splineAll[Math.min(totalSp - 1, endIdx + 1)];
+      const isShortcutSelected = (sIdx === selectedShortcutIdx);
+      const isCurveHovered = (hoverShortcutPoint && hoverShortcutPoint.sIdx === sIdx && hoverShortcutPoint.type === 'curve');
 
-      const tanStartX = sp2.x - sp1.x, tanStartZ = sp2.z - sp1.z;
-      const tanStartLen = Math.sqrt(tanStartX*tanStartX + tanStartZ*tanStartZ) || 1;
-      const normStartX = -tanStartZ / tanStartLen, normStartZ = tanStartX / tanStartLen;
+      ctx.save();
 
-      const tanEndX = sp4.x - sp3.x, tanEndZ = sp4.z - sp3.z;
-      const tanEndLen = Math.sqrt(tanEndX*tanEndX + tanEndZ*tanEndZ) || 1;
-      const normEndX = -tanEndZ / tanEndLen, normEndZ = tanEndX / tanEndLen;
-
-      // Determinar lado (hacia donde va el primer punto de control)
-      const toFirstX = firstCP[0] - startP.x, toFirstZ = firstCP[2] - startP.z;
-      const sideStart = (toFirstX * normStartX + toFirstZ * normStartZ) >= 0 ? 1 : -1;
-
-      const toEndX = endP.x - lastCP[0], toEndZ = endP.z - lastCP[2];
-      const sideEnd = (toEndX * normEndX + toEndZ * normEndZ) >= 0 ? 1 : -1;
-
-      const anchorStart = { x: startP.x + normStartX * hw * sideStart, z: startP.z + normStartZ * hw * sideStart };
-      const anchorEnd   = { x: endP.x   + normEndX   * hw * sideEnd,   z: endP.z   + normEndZ   * hw * sideEnd   };
-
-      const pts = [anchorStart, ...sc.controlPoints.map(p => ({ x: p[0], z: p[2] })), anchorEnd];
-      const scSpline = buildSpline(pts, false, 15);
-      
+      // ── 1. Cinta / Pista del Atajo (Asfalto y Bordes) ──
       ctx.beginPath();
-      scSpline.forEach((p, i) => {
+      geom.scSpline.forEach((p, i) => {
         const scPos = worldToCanvas(p.x, p.z);
         i === 0 ? ctx.moveTo(scPos.x, scPos.y) : ctx.lineTo(scPos.x, scPos.y);
       });
+      ctx.strokeStyle = isShortcutSelected ? '#00e5ff' : (isCurveHovered ? '#00bbff' : '#006699');
+      ctx.lineWidth = Math.max(3, (sc.halfWidth ? sc.halfWidth * 1.6 : 10) * zoom);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       ctx.stroke();
+
+      // Línea central punteada del atajo
+      ctx.beginPath();
+      geom.scSpline.forEach((p, i) => {
+        const scPos = worldToCanvas(p.x, p.z);
+        i === 0 ? ctx.moveTo(scPos.x, scPos.y) : ctx.lineTo(scPos.x, scPos.y);
+      });
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = Math.max(1, 2 / zoom);
+      ctx.setLineDash([5 / zoom, 4 / zoom]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // ── 2. Polígono / Jaula de Control (Conecta ancla inicio -> CPs -> ancla fin) ──
+      ctx.beginPath();
+      const scStart = worldToCanvas(geom.anchorStart.x, geom.anchorStart.z);
+      ctx.moveTo(scStart.x, scStart.y);
+      for (const cp of sc.controlPoints) {
+        const scCp = worldToCanvas(cp[0], cp[2]);
+        ctx.lineTo(scCp.x, scCp.y);
+      }
+      const scEnd = worldToCanvas(geom.anchorEnd.x, geom.anchorEnd.z);
+      ctx.lineTo(scEnd.x, scEnd.y);
+      ctx.strokeStyle = isShortcutSelected ? 'rgba(255, 204, 0, 0.75)' : 'rgba(0, 229, 255, 0.35)';
+      ctx.lineWidth = Math.max(1, 1.5 / zoom);
+      ctx.setLineDash([4 / zoom, 4 / zoom]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // ── 3. Guías de Conexión a la Pista Principal ──
+      const scTrackStart = worldToCanvas(geom.startP.x, geom.startP.z);
+      ctx.beginPath();
+      ctx.moveTo(scTrackStart.x, scTrackStart.y);
+      ctx.lineTo(scStart.x, scStart.y);
+      ctx.strokeStyle = 'rgba(0, 255, 136, 0.5)';
+      ctx.lineWidth = Math.max(1, 1.2 / zoom);
+      ctx.stroke();
+
+      const scTrackEnd = worldToCanvas(geom.endP.x, geom.endP.z);
+      ctx.beginPath();
+      ctx.moveTo(scTrackEnd.x, scTrackEnd.y);
+      ctx.lineTo(scEnd.x, scEnd.y);
+      ctx.strokeStyle = 'rgba(255, 68, 102, 0.5)';
+      ctx.lineWidth = Math.max(1, 1.2 / zoom);
+      ctx.stroke();
+
+      // ── 4. Puntos de Control Intermedios (CP) ──
+      for (let cpIdx = 0; cpIdx < sc.controlPoints.length; cpIdx++) {
+        const cp = sc.controlPoints[cpIdx];
+        const scCp = worldToCanvas(cp[0], cp[2]);
+        const isCpSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'cp' && selectedShortcutPoint.cpIdx === cpIdx;
+        const isCpHovered = (hoverShortcutPoint && hoverShortcutPoint.sIdx === sIdx && hoverShortcutPoint.type === 'cp' && hoverShortcutPoint.cpIdx === cpIdx);
+
+        // Halo de selección adaptativo >= 150px
+        if (isCpSelected || isCpHovered) {
+          ctx.save();
+          const selR = Math.max(MIN_ELEMENT_RADIUS_PX, 16 + 8 / zoom);
+          ctx.beginPath();
+          ctx.arc(scCp.x, scCp.y, selR, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 187, 0, 0.15)';
+          ctx.fill();
+          ctx.strokeStyle = '#ffbb00';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Retícula central
+          ctx.strokeStyle = '#ffbb00';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(scCp.x - 7, scCp.y); ctx.lineTo(scCp.x + 7, scCp.y);
+          ctx.moveTo(scCp.x, scCp.y - 7); ctx.lineTo(scCp.x, scCp.y + 7);
+          ctx.stroke();
+
+          // Badge flotante
+          const badgeText = `ATAJO #${sIdx + 1} PUNTO CP#${cpIdx + 1} [X:${Math.round(cp[0])}, Z:${Math.round(cp[2])}] | Ø ≥150px`;
+          ctx.font = "bold 10px 'Share Tech Mono', monospace";
+          const tw = ctx.measureText(badgeText).width;
+          ctx.fillStyle = 'rgba(16, 14, 10, 0.9)';
+          ctx.fillRect(scCp.x - tw / 2 - 6, scCp.y - selR - 22, tw + 12, 16);
+          ctx.strokeStyle = '#ffbb00'; ctx.lineWidth = 1;
+          ctx.strokeRect(scCp.x - tw / 2 - 6, scCp.y - selR - 22, tw + 12, 16);
+          ctx.fillStyle = '#ffbb00'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, scCp.x, scCp.y - selR - 14);
+          ctx.restore();
+        }
+
+        // Nodo circular del punto intermedio
+        const nodeR = Math.max(7, 9 / zoom);
+        ctx.beginPath();
+        ctx.arc(scCp.x, scCp.y, nodeR, 0, Math.PI * 2);
+        ctx.fillStyle = isCpSelected ? '#ffdd00' : '#ff9900';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        ctx.fillStyle = '#000000';
+        ctx.font = `bold ${Math.max(7, 9 / zoom)}px 'Share Tech Mono', monospace`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(`CP${cpIdx + 1}`, scCp.x, scCp.y);
+      }
+
+      // ── 5. Ancla de Inicio (⚓ anchorStart) ──
+      const isStartSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'start';
+      const isStartHovered = (hoverShortcutPoint && hoverShortcutPoint.sIdx === sIdx && hoverShortcutPoint.type === 'start');
+
+      if (isStartSelected || isStartHovered) {
+        ctx.save();
+        const selR = Math.max(MIN_ELEMENT_RADIUS_PX, 18 + 8 / zoom);
+        ctx.beginPath();
+        ctx.arc(scStart.x, scStart.y, selR, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.16)';
+        ctx.fill();
+        ctx.strokeStyle = '#00ff88';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const badgeText = `⚓ ATAJO #${sIdx + 1} ANCLA INICIO [Muestra ${sc.startSampleIdx}] | Ø ≥150px`;
+        ctx.font = "bold 10px 'Share Tech Mono', monospace";
+        const tw = ctx.measureText(badgeText).width;
+        ctx.fillStyle = 'rgba(10, 16, 12, 0.9)';
+        ctx.fillRect(scStart.x - tw / 2 - 6, scStart.y - selR - 22, tw + 12, 16);
+        ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 1;
+        ctx.strokeRect(scStart.x - tw / 2 - 6, scStart.y - selR - 22, tw + 12, 16);
+        ctx.fillStyle = '#00ff88'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(badgeText, scStart.x, scStart.y - selR - 14);
+        ctx.restore();
+      }
+
+      const anchorStartR = Math.max(9, 12 / zoom);
+      ctx.beginPath();
+      ctx.arc(scStart.x, scStart.y, anchorStartR, 0, Math.PI * 2);
+      ctx.fillStyle = isStartSelected ? '#00ff88' : '#00aa55';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${Math.max(8, 10 / zoom)}px 'Share Tech Mono', monospace`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('⚓', scStart.x, scStart.y);
+
+      // ── 6. Ancla de Fin (🎯 anchorEnd) ──
+      const isEndSelected = isShortcutSelected && selectedShortcutPoint && selectedShortcutPoint.type === 'end';
+      const isEndHovered = (hoverShortcutPoint && hoverShortcutPoint.sIdx === sIdx && hoverShortcutPoint.type === 'end');
+
+      if (isEndSelected || isEndHovered) {
+        ctx.save();
+        const selR = Math.max(MIN_ELEMENT_RADIUS_PX, 18 + 8 / zoom);
+        ctx.beginPath();
+        ctx.arc(scEnd.x, scEnd.y, selR, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 68, 102, 0.16)';
+        ctx.fill();
+        ctx.strokeStyle = '#ff3366';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const badgeText = `🎯 ATAJO #${sIdx + 1} ANCLA FIN [Muestra ${sc.endSampleIdx}] | Ø ≥150px`;
+        ctx.font = "bold 10px 'Share Tech Mono', monospace";
+        const tw = ctx.measureText(badgeText).width;
+        ctx.fillStyle = 'rgba(16, 10, 12, 0.9)';
+        ctx.fillRect(scEnd.x - tw / 2 - 6, scEnd.y - selR - 22, tw + 12, 16);
+        ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 1;
+        ctx.strokeRect(scEnd.x - tw / 2 - 6, scEnd.y - selR - 22, tw + 12, 16);
+        ctx.fillStyle = '#ff4466'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(badgeText, scEnd.x, scEnd.y - selR - 14);
+        ctx.restore();
+      }
+
+      const anchorEndR = Math.max(9, 12 / zoom);
+      ctx.beginPath();
+      ctx.arc(scEnd.x, scEnd.y, anchorEndR, 0, Math.PI * 2);
+      ctx.fillStyle = isEndSelected ? '#ff3366' : '#cc2244';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${Math.max(8, 10 / zoom)}px 'Share Tech Mono', monospace`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🎯', scEnd.x, scEnd.y);
+
+      ctx.restore();
     }
     
-    // Dibujar borrador en curso
+    // ── 7. Dibujar borrador en curso ──
     if (shortcutDraft) {
+      ctx.save();
       ctx.strokeStyle = '#ffbb00';
+      ctx.lineWidth = Math.max(1.5, 3 / zoom);
       ctx.setLineDash([5, 5]);
       const startP = getTrackWorldPoint(shortcutDraft.startSampleIdx);
       if (startP) {
@@ -1255,30 +2021,337 @@
         for (const pt of shortcutDraft.controlPoints) {
           const scPos = worldToCanvas(pt[0], pt[2]);
           ctx.lineTo(scPos.x, scPos.y);
-          ctx.fillRect(scPos.x - 2, scPos.y - 2, 4, 4);
         }
         ctx.stroke();
+
+        // Ancla inicial del borrador
+        ctx.beginPath();
+        ctx.arc(startSc.x, startSc.y, Math.max(8, 11 / zoom), 0, Math.PI * 2);
+        ctx.fillStyle = '#00ff88'; ctx.fill();
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#000'; ctx.font = `bold ${Math.max(7, 9 / zoom)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('⚓', startSc.x, startSc.y);
+
+        // Puntos intermedios del borrador
+        for (let i = 0; i < shortcutDraft.controlPoints.length; i++) {
+          const pt = shortcutDraft.controlPoints[i];
+          const scPos = worldToCanvas(pt[0], pt[2]);
+          ctx.beginPath();
+          ctx.arc(scPos.x, scPos.y, Math.max(6, 8 / zoom), 0, Math.PI * 2);
+          ctx.fillStyle = '#ffbb00'; ctx.fill();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+        }
       }
       ctx.setLineDash([]);
+      ctx.restore();
     }
   }
 
+  function updateTerrainCount() {
+    const el = document.getElementById('terrain-count');
+    if (el) el.textContent = `${editorTerrainNodes.length} estructuras de terreno`;
+  }
+
+  function getClosestTrackTangentAngle(wx, wz) {
+    if (controlPoints.length < 2) return 0;
+    const spline = buildSpline(controlPoints, true, 40);
+    let minDistSq = Infinity;
+    let bestIdx = 0;
+    for (let i = 0; i < spline.length; i++) {
+      const p = spline[i];
+      const dSq = (p.x - wx) ** 2 + (p.z - wz) ** 2;
+      if (dSq < minDistSq) {
+        minDistSq = dSq;
+        bestIdx = i;
+      }
+    }
+    const nextIdx = (bestIdx + 1) % spline.length;
+    const prevIdx = (bestIdx - 1 + spline.length) % spline.length;
+    const dx = spline[nextIdx].x - spline[prevIdx].x;
+    const dz = spline[nextIdx].z - spline[prevIdx].z;
+    let angleDeg = Math.round(Math.atan2(dz, dx) * (180 / Math.PI));
+    if (angleDeg < 0) angleDeg += 360;
+    return angleDeg;
+  }
+
   function drawTerrainNodes() {
-    for (const node of editorTerrainNodes) {
+    updateTerrainCount();
+    for (let i = 0; i < editorTerrainNodes.length; i++) {
+      const node = editorTerrainNodes[i];
       const sc = worldToCanvas(node.x, node.z);
-      const rCanvas = node.radius * zoom;
-      ctx.beginPath();
-      ctx.arc(sc.x, sc.y, rCanvas, 0, Math.PI * 2);
-      ctx.fillStyle = node.height >= 0 ? 'rgba(0, 255, 100, 0.15)' : 'rgba(255, 50, 50, 0.15)';
-      ctx.fill();
-      ctx.strokeStyle = node.height >= 0 ? 'rgba(0, 255, 100, 0.5)' : 'rgba(255, 50, 50, 0.5)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      
-      ctx.fillStyle = 'white';
-      ctx.font = '10px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(node.height >= 0 ? `+${node.height}` : `${node.height}`, sc.x, sc.y + 4);
+      // Clamp adaptativo: radio NUNCA inferior a 75px (diámetro >= 150px en pantalla)
+      const rCanvas = getClampedScreenRadius(node.radius);
+      const physR = (node.radius || 50) * zoom;
+      const isSelected = (i === selectedTerrainIdx);
+      const isHovered = (i === hoverTerrainIdx && !isSelected);
+      const isTunnel = (node.type === 'mountain_tunnel' || node.hasHole);
+
+      ctx.save();
+
+      // Indicador de hover previo (anillo blanco translúcido de 150px+)
+      if (isHovered) {
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, rCanvas + 3, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (isTunnel) {
+        // ── Montaña con Túnel (Paso Pasante) ──
+        const grad = ctx.createRadialGradient(sc.x, sc.y, 0, sc.x, sc.y, rCanvas);
+        grad.addColorStop(0, 'rgba(50, 30, 55, 0.85)');
+        grad.addColorStop(0.7, 'rgba(28, 16, 32, 0.7)');
+        grad.addColorStop(1, 'rgba(80, 25, 60, 0.45)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, rCanvas, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Anillo exterior con glow
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(255, 100, 200, 0.75)';
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        if (isSelected) {
+          ctx.shadowColor = '#00ffff';
+          ctx.shadowBlur = 10;
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Si el tamaño real de mundo es menor al clamp de 150px, dibujar su radio físico real
+        if (physR < rCanvas) {
+          ctx.beginPath();
+          ctx.arc(sc.x, sc.y, physR, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+          ctx.setLineDash([3, 3]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Corredor del túnel pasante (escalado al radio clamped para visibilidad de 150px+)
+        const angleRad = ((node.holeAngle || 0) * Math.PI) / 180;
+        const screenScale = rCanvas / Math.max(1, node.radius || 50);
+        const hwCanvas = Math.max(14, ((node.holeWidth || 22) * screenScale) / 2);
+        const hlCanvas = rCanvas * 1.05;
+
+        ctx.save();
+        ctx.translate(sc.x, sc.y);
+        ctx.rotate(angleRad);
+
+        // Fondo del canal de túnel
+        ctx.fillStyle = 'rgba(10, 10, 18, 0.95)';
+        ctx.fillRect(-hlCanvas, -hwCanvas, hlCanvas * 2, hwCanvas * 2);
+
+        // Paredes del túnel (líneas punteadas cyan de alta visibilidad)
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(-hlCanvas, -hwCanvas); ctx.lineTo(hlCanvas, -hwCanvas);
+        ctx.moveTo(-hlCanvas, hwCanvas); ctx.lineTo(hlCanvas, hwCanvas);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Flecha de sentido del túnel
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-rCanvas * 0.35, 0); ctx.lineTo(rCanvas * 0.35, 0);
+        ctx.lineTo(rCanvas * 0.2, -hwCanvas * 0.4);
+        ctx.moveTo(rCanvas * 0.35, 0); ctx.lineTo(rCanvas * 0.2, hwCanvas * 0.4);
+        ctx.stroke();
+
+        // Tapas de entrada y salida
+        ctx.fillStyle = '#00ffff';
+        ctx.fillRect(-hlCanvas - 2, -hwCanvas, 4, hwCanvas * 2);
+        ctx.fillRect(hlCanvas - 2, -hwCanvas, 4, hwCanvas * 2);
+        ctx.restore();
+
+        // Si está seleccionado: dibujar Gizmo Orbital de rotación de ángulo
+        if (isSelected) {
+          const knobDist = rCanvas + 18;
+          const knobX = sc.x + Math.cos(angleRad) * knobDist;
+          const knobY = sc.y + Math.sin(angleRad) * knobDist;
+
+          // Órbita circular discontinua
+          ctx.beginPath();
+          ctx.arc(sc.x, sc.y, knobDist, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
+          ctx.setLineDash([3, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Línea conector hacia el knob
+          ctx.beginPath();
+          ctx.moveTo(sc.x, sc.y);
+          ctx.lineTo(knobX, knobY);
+          ctx.strokeStyle = 'rgba(0, 229, 255, 0.6)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Tirador orbital (Knob de rotación interactivo)
+          ctx.beginPath();
+          ctx.arc(knobX, knobY, 9, 0, Math.PI * 2);
+          ctx.fillStyle = '#00e5ff';
+          ctx.shadowColor = '#00e5ff';
+          ctx.shadowBlur = 8;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          ctx.beginPath();
+          ctx.arc(knobX, knobY, 4, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+
+          // Pill indicador de ángulo
+          ctx.font = "bold 9px 'Share Tech Mono', monospace";
+          const angleLabel = `⟳ ROTAR ${node.holeAngle || 0}°`;
+          const alw = ctx.measureText(angleLabel).width;
+          ctx.fillStyle = 'rgba(10, 10, 16, 0.9)';
+          ctx.fillRect(knobX - alw / 2 - 4, knobY + 12, alw + 8, 14);
+          ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 1;
+          ctx.strokeRect(knobX - alw / 2 - 4, knobY + 12, alw + 8, 14);
+          ctx.fillStyle = '#00e5ff';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(angleLabel, knobX, knobY + 19);
+        }
+
+        // Rótulo táctico superior
+        const label = `⛰️ TÚNEL +${node.height}u [${node.holeAngle || 0}°]`;
+        ctx.font = "bold 9px 'Share Tech Mono', monospace";
+        const lw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(10, 10, 16, 0.85)';
+        ctx.fillRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(255, 100, 200, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x, sc.y - rCanvas - 9);
+
+      } else if (node.type === 'mountain') {
+        // ── Montaña Sólida ──
+        const grad = ctx.createRadialGradient(sc.x, sc.y, 0, sc.x, sc.y, rCanvas);
+        grad.addColorStop(0, 'rgba(90, 20, 30, 0.9)');
+        grad.addColorStop(0.6, 'rgba(45, 10, 18, 0.75)');
+        grad.addColorStop(1, 'rgba(180, 0, 0, 0.45)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, rCanvas, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(255, 60, 60, 0.75)';
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        if (isSelected) { ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10; }
+        ctx.stroke(); ctx.shadowBlur = 0;
+
+        if (physR < rCanvas) {
+          ctx.beginPath(); ctx.arc(sc.x, sc.y, physR, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'; ctx.setLineDash([3, 3]);
+          ctx.stroke(); ctx.setLineDash([]);
+        }
+
+        // Pico central
+        ctx.fillStyle = '#ff4444';
+        ctx.beginPath();
+        ctx.moveTo(sc.x, sc.y - 8);
+        ctx.lineTo(sc.x + 7, sc.y + 6);
+        ctx.lineTo(sc.x - 7, sc.y + 6);
+        ctx.closePath();
+        ctx.fill();
+
+        // Rótulo superior
+        const label = `🏔️ MONTAÑA +${node.height}u`;
+        ctx.font = "bold 9px 'Share Tech Mono', monospace";
+        const lw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(10, 10, 16, 0.85)';
+        ctx.fillRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(255, 60, 60, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x, sc.y - rCanvas - 9);
+
+      } else if (node.type === 'crater' || node.height < 0) {
+        // ── Cráter / Depresión ──
+        const grad = ctx.createRadialGradient(sc.x, sc.y, 0, sc.x, sc.y, rCanvas);
+        grad.addColorStop(0, 'rgba(10, 0, 0, 0.95)');
+        grad.addColorStop(0.7, 'rgba(60, 10, 10, 0.6)');
+        grad.addColorStop(1, 'rgba(180, 50, 50, 0.35)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, rCanvas, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(255, 50, 50, 0.7)';
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (physR < rCanvas) {
+          ctx.beginPath(); ctx.arc(sc.x, sc.y, physR, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'; ctx.setLineDash([3, 3]);
+          ctx.stroke(); ctx.setLineDash([]);
+        }
+
+        const label = `🕳️ CRÁTER ${node.height}u`;
+        ctx.font = "bold 9px 'Share Tech Mono', monospace";
+        const lw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(10, 10, 16, 0.85)';
+        ctx.fillRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(255, 50, 50, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.fillStyle = '#ff6666'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x, sc.y - rCanvas - 9);
+
+      } else {
+        // ── Colina Suave ──
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, rCanvas, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 255, 120, 0.2)';
+        ctx.fill();
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(0, 255, 120, 0.6)';
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        ctx.stroke();
+
+        if (physR < rCanvas) {
+          ctx.beginPath(); ctx.arc(sc.x, sc.y, physR, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'; ctx.setLineDash([3, 3]);
+          ctx.stroke(); ctx.setLineDash([]);
+        }
+
+        const label = `🟢 COLINA +${node.height}u`;
+        ctx.font = "bold 9px 'Share Tech Mono', monospace";
+        const lw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(10, 10, 16, 0.85)';
+        ctx.fillRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.strokeStyle = isSelected ? '#00ffff' : 'rgba(0, 255, 120, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sc.x - lw / 2 - 5, sc.y - rCanvas - 16, lw + 10, 14);
+        ctx.fillStyle = '#4ade80'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x, sc.y - rCanvas - 9);
+      }
+
+      // Retícula central de arrastre cuando está seleccionado
+      if (isSelected) {
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sc.x - 8, sc.y); ctx.lineTo(sc.x + 8, sc.y);
+        ctx.moveTo(sc.x, sc.y - 8); ctx.lineTo(sc.x, sc.y + 8);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
+
+      ctx.restore();
     }
   }
   
@@ -1403,15 +2476,55 @@
       const isSelected = i === selectedIdx;
       const isFirst = i === 0;
 
-      // Halo
+      // Círculo de selección adaptativo >= 150px
       if (isSelected) {
+        const selR = Math.max(MIN_ELEMENT_RADIUS_PX, r + 12); // NUNCA menor a 75px de radio (150px diámetro)
+        ctx.save();
         ctx.beginPath();
-        ctx.arc(sc.x, sc.y, r + 5 / zoom, 0, Math.PI * 2);
-        ctx.fillStyle = '#6e00cc33';
+        ctx.arc(sc.x, sc.y, selR, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0, 229, 255, 0.12)';
         ctx.fill();
+
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Retículas tácticas (marcas a 0, 90, 180, 270 grados)
+        const tickLen = 8;
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        // Arriba
+        ctx.moveTo(sc.x, sc.y - selR - tickLen); ctx.lineTo(sc.x, sc.y - selR + 2);
+        // Abajo
+        ctx.moveTo(sc.x, sc.y + selR - 2); ctx.lineTo(sc.x, sc.y + selR + tickLen);
+        // Izquierda
+        ctx.moveTo(sc.x - selR - tickLen, sc.y); ctx.lineTo(sc.x - selR + 2, sc.y);
+        // Derecha
+        ctx.moveTo(sc.x + selR - 2, sc.y); ctx.lineTo(sc.x + selR + tickLen, sc.y);
+        ctx.stroke();
+
+        // Badge HUD flotante con coordenadas y diámetro
+        const label = `PUNTO #${i} [X: ${Math.round(p.x)}, Z: ${Math.round(p.z)}, Y: ${p.y || 0}u | Ø ≥150px]`;
+        ctx.font = "bold 10px 'Share Tech Mono', monospace";
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(10, 10, 16, 0.85)';
+        ctx.fillRect(sc.x - tw / 2 - 6, sc.y - selR - 22, tw + 12, 16);
+        ctx.strokeStyle = 'rgba(0, 229, 255, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sc.x - tw / 2 - 6, sc.y - selR - 22, tw + 12, 16);
+
+        ctx.fillStyle = '#00ffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, sc.x, sc.y - selR - 14);
+
+        ctx.restore();
       }
 
-      // Círculo
+      // Círculo central
       ctx.beginPath();
       ctx.arc(sc.x, sc.y, r, 0, Math.PI * 2);
       ctx.fillStyle = isFirst ? '#A30000' : isSelected ? '#ff4444' : '#2A0000';
@@ -1421,7 +2534,7 @@
       ctx.stroke();
 
       // Número y Elevación
-      if (zoom > 0.4) {
+      if (zoom > 0.4 || isSelected) {
         ctx.fillStyle = '#F5F5F5';
         ctx.font = `bold ${Math.max(6, 9 / zoom)}px 'Share Tech Mono', monospace`;
         ctx.textAlign = 'center';
@@ -1435,6 +2548,276 @@
         }
       }
     });
+  }
+
+  function drawPlacementGhost() {
+    if (!mouseInCanvas) return;
+
+    if (tool === 'terrain-add') {
+      const type = (document.getElementById('terrain-type') && document.getElementById('terrain-type').value) || 'mountain_tunnel';
+      const h = parseInt(document.getElementById('node-height') ? document.getElementById('node-height').value : 45) || (type === 'crater' ? -25 : 45);
+      const r = parseInt(document.getElementById('node-radius') ? document.getElementById('node-radius').value : 50) || 50;
+      const isTunnel = (type === 'mountain_tunnel');
+      const tunnelWidth = isTunnel ? (parseInt(document.getElementById('tunnel-width') ? document.getElementById('tunnel-width').value : 22) || 22) : 0;
+      let tunnelAngle = isTunnel ? (parseFloat(document.getElementById('tunnel-angle') ? document.getElementById('tunnel-angle').value : 0) || 0) : 0;
+
+      const wPos = canvasToWorld(mouseScreenPos.x, mouseScreenPos.y);
+      if (isTunnel && tunnelAngle === 0) {
+        tunnelAngle = getClosestTrackTangentAngle(wPos.x, wPos.z);
+      }
+
+      const rScreen = getClampedScreenRadius(r); // Garantiza >= 75px (150px de diametro)
+      const physR = r * zoom;
+
+      ctx.save();
+      ctx.translate(mouseScreenPos.x, mouseScreenPos.y);
+
+      // Fondo holográfico
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rScreen);
+      grad.addColorStop(0, isTunnel ? 'rgba(0, 229, 255, 0.22)' : 'rgba(255, 50, 90, 0.22)');
+      grad.addColorStop(0.7, isTunnel ? 'rgba(0, 150, 200, 0.12)' : 'rgba(180, 30, 60, 0.12)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0.04)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, rScreen, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Borde neón pulsante (mínimo 150px de diámetro)
+      ctx.strokeStyle = isTunnel ? '#00ffff' : '#ff3366';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Si el radio físico es menor que el clamp de 150px, dibujar círculo interno indicándolo
+      if (physR < rScreen) {
+        ctx.beginPath();
+        ctx.arc(0, 0, physR, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.setLineDash([2, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Retícula central
+      ctx.strokeStyle = isTunnel ? 'rgba(0, 255, 255, 0.6)' : 'rgba(255, 80, 80, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-10, 0); ctx.lineTo(10, 0);
+      ctx.moveTo(0, -10); ctx.lineTo(0, 10);
+      ctx.stroke();
+
+      if (isTunnel) {
+        // Previsualización del corredor del túnel
+        const angleRad = (tunnelAngle * Math.PI) / 180;
+        const screenScale = rScreen / Math.max(1, r);
+        const hwCanvas = Math.max(14, (tunnelWidth * screenScale) / 2);
+        const hlCanvas = rScreen * 1.05;
+
+        ctx.save();
+        ctx.rotate(angleRad);
+
+        // Caja de paso
+        ctx.fillStyle = 'rgba(0, 20, 30, 0.8)';
+        ctx.fillRect(-hlCanvas, -hwCanvas, hlCanvas * 2, hwCanvas * 2);
+
+        // Paredes punteadas cyan
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(-hlCanvas, -hwCanvas); ctx.lineTo(hlCanvas, -hwCanvas);
+        ctx.moveTo(-hlCanvas, hwCanvas); ctx.lineTo(hlCanvas, hwCanvas);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Flecha de dirección
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-rScreen * 0.35, 0); ctx.lineTo(rScreen * 0.35, 0);
+        ctx.lineTo(rScreen * 0.2, -hwCanvas * 0.4);
+        ctx.moveTo(rScreen * 0.35, 0); ctx.lineTo(rScreen * 0.2, hwCanvas * 0.4);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      // Badge flotante
+      const title = isTunnel
+        ? `⛰️ COLOCAR TÚNEL [+${h}u | ${tunnelAngle}° | Ø ≥150px]`
+        : `⛰️ COLOCAR MONTAÑA [+${h}u | R:${r}u | Ø ≥150px]`;
+      ctx.font = "bold 10px 'Share Tech Mono', monospace";
+      const bw = ctx.measureText(title).width;
+      ctx.fillStyle = 'rgba(10, 10, 16, 0.9)';
+      ctx.fillRect(-bw / 2 - 8, -rScreen - 26, bw + 16, 18);
+      ctx.strokeStyle = isTunnel ? '#00ffff' : '#ff3366';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-bw / 2 - 8, -rScreen - 26, bw + 16, 18);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(title, 0, -rScreen - 17);
+
+      ctx.restore();
+
+      // Línea tangente / guía hacia el punto de pista más cercano
+      if (controlPoints.length >= 2) {
+        const spline = buildSpline(controlPoints, true, 25);
+        let bestP = null, minDist = Infinity;
+        for (const sp of spline) {
+          const d = (sp.x - wPos.x)**2 + (sp.z - wPos.z)**2;
+          if (d < minDist) { minDist = d; bestP = sp; }
+        }
+        if (bestP && minDist < (300)**2) {
+          const scP = worldToCanvas(bestP.x, bestP.z);
+          ctx.strokeStyle = 'rgba(0, 229, 255, 0.4)';
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(mouseScreenPos.x, mouseScreenPos.y);
+          ctx.lineTo(scP.x, scP.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+    } else if (tool === 'shortcut-add') {
+      const hit = splineHitTest(mouseScreenPos.x, mouseScreenPos.y);
+      if (!shortcutDraft) {
+        if (hit) {
+          // Anillo magnético de inicio de atajo en pista (>= 150px)
+          const spPoint = getTrackWorldPoint(hit.sampleIdx);
+          if (spPoint) {
+            const sc = worldToCanvas(spPoint.x, spPoint.z);
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(sc.x, sc.y, MIN_ELEMENT_RADIUS_PX, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+            ctx.fill();
+            ctx.strokeStyle = '#00ff88';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            const txt = "⚓ ANCLAR INICIO DE ATAJO (CLICK)";
+            ctx.font = "bold 10px 'Share Tech Mono', monospace";
+            const tw = ctx.measureText(txt).width;
+            ctx.fillStyle = 'rgba(10, 16, 12, 0.9)';
+            ctx.fillRect(sc.x - tw / 2 - 6, sc.y - MIN_ELEMENT_RADIUS_PX - 22, tw + 12, 16);
+            ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 1;
+            ctx.strokeRect(sc.x - tw / 2 - 6, sc.y - MIN_ELEMENT_RADIUS_PX - 22, tw + 12, 16);
+            ctx.fillStyle = '#00ff88'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(txt, sc.x, sc.y - MIN_ELEMENT_RADIUS_PX - 14);
+            ctx.restore();
+          }
+        } else {
+          // Guía bajo el cursor indicando acercarse a la pista
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(mouseScreenPos.x, mouseScreenPos.y, MIN_ELEMENT_RADIUS_PX, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(0, 150, 255, 0.4)';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+      } else {
+        // En progreso de dibujo de atajo: línea elástica y círculo de colocación >= 150px
+        const lastPt = shortcutDraft.controlPoints.length > 0
+          ? shortcutDraft.controlPoints[shortcutDraft.controlPoints.length - 1]
+          : null;
+        let lastSc = null;
+        if (lastPt) {
+          lastSc = worldToCanvas(lastPt[0], lastPt[2]);
+        } else {
+          const spPoint = getTrackWorldPoint(shortcutDraft.startSampleIdx);
+          if (spPoint) lastSc = worldToCanvas(spPoint.x, spPoint.z);
+        }
+
+        if (lastSc) {
+          ctx.save();
+          ctx.strokeStyle = '#ffbb00';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          ctx.beginPath();
+          ctx.moveTo(lastSc.x, lastSc.y);
+          ctx.lineTo(mouseScreenPos.x, mouseScreenPos.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+
+        // Anillo de colocación en cursor (>= 150px)
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(mouseScreenPos.x, mouseScreenPos.y, MIN_ELEMENT_RADIUS_PX, 0, Math.PI * 2);
+        ctx.fillStyle = hit ? 'rgba(0, 255, 128, 0.2)' : 'rgba(255, 187, 0, 0.15)';
+        ctx.fill();
+        ctx.strokeStyle = hit ? '#00ff88' : '#ffbb00';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const txt = hit ? "CLICK: CERRAR ATAJO EN PISTA" : "CLICK: AGREGAR CURVA DE ATAJO";
+        ctx.font = "bold 10px 'Share Tech Mono', monospace";
+        const tw = ctx.measureText(txt).width;
+        ctx.fillStyle = 'rgba(10, 10, 16, 0.9)';
+        ctx.fillRect(mouseScreenPos.x - tw / 2 - 6, mouseScreenPos.y - MIN_ELEMENT_RADIUS_PX - 22, tw + 12, 16);
+        ctx.strokeStyle = hit ? '#00ff88' : '#ffbb00'; ctx.lineWidth = 1;
+        ctx.strokeRect(mouseScreenPos.x - tw / 2 - 6, mouseScreenPos.y - MIN_ELEMENT_RADIUS_PX - 22, tw + 12, 16);
+        ctx.fillStyle = hit ? '#00ff88' : '#ffbb00'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(txt, mouseScreenPos.x, mouseScreenPos.y - MIN_ELEMENT_RADIUS_PX - 14);
+        ctx.restore();
+      }
+    } else if (tool === 'add') {
+      // Indicador de inserción de nuevo punto de pista (>= 150px)
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(mouseScreenPos.x, mouseScreenPos.y, MIN_ELEMENT_RADIUS_PX, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 68, 68, 0.1)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 68, 68, 0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const wPos = canvasToWorld(mouseScreenPos.x, mouseScreenPos.y);
+      if (controlPoints.length >= 2) {
+        const seg = closestSegmentIdx(wPos);
+        const pA = controlPoints[seg];
+        const pB = controlPoints[(seg + 1) % controlPoints.length];
+        const scA = worldToCanvas(pA.x, pA.z);
+        const scB = worldToCanvas(pB.x, pB.z);
+
+        ctx.strokeStyle = '#ff4444';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(scA.x, scA.y);
+        ctx.lineTo(mouseScreenPos.x, mouseScreenPos.y);
+        ctx.lineTo(scB.x, scB.y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#ff4444';
+      ctx.beginPath();
+      ctx.arc(mouseScreenPos.x, mouseScreenPos.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      const txt = "+ INSERTAR PUNTO DE CONTROL (Ø ≥150px)";
+      ctx.font = "bold 10px 'Share Tech Mono', monospace";
+      const tw = ctx.measureText(txt).width;
+      ctx.fillStyle = 'rgba(10, 10, 16, 0.9)';
+      ctx.fillRect(mouseScreenPos.x - tw / 2 - 6, mouseScreenPos.y - MIN_ELEMENT_RADIUS_PX - 22, tw + 12, 16);
+      ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 1;
+      ctx.strokeRect(mouseScreenPos.x - tw / 2 - 6, mouseScreenPos.y - MIN_ELEMENT_RADIUS_PX - 22, tw + 12, 16);
+      ctx.fillStyle = '#ff4444'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(txt, mouseScreenPos.x, mouseScreenPos.y - MIN_ELEMENT_RADIUS_PX - 14);
+
+      ctx.restore();
+    }
   }
 
   function drawObstacles(spline) {
@@ -1548,13 +2931,531 @@
     ctx.fillText('// o pulsá "Cargar desde servidor" para recuperar el último nivel guardado', canvas.width / 2, canvas.height / 2 + 12);
   }
 
+  function sync3DIfNeeded() {
+    if (editor3D && (viewMode === '3d' || viewMode === 'split')) {
+      editor3D.syncFrom2D();
+    }
+  }
+
   // ────────────────────────────────────────────────────
   //  Canvas resize
   // ────────────────────────────────────────────────────
   function resizeCanvas() {
     const area = document.getElementById('canvas-area');
-    canvas.width = area.clientWidth;
+    if (!area) return;
+    const isSplit = area.classList.contains('split-view');
+    canvas.width = isSplit ? area.clientWidth / 2 : area.clientWidth;
     canvas.height = area.clientHeight;
+    if (editor3D) editor3D.resize();
+  }
+
+  // ────────────────────────────────────────────────────
+  //  Motor 3D de Previsualización (Three.js)
+  // ────────────────────────────────────────────────────
+  function initEditor3D() {
+    if (editor3D) return;
+    const container = document.getElementById('viewport-3d');
+    const threeCanvas = document.getElementById('three-canvas');
+    if (!window.THREE || !container || !threeCanvas) return;
+    editor3D = new Editor3DEngine(threeCanvas, container);
+  }
+
+  class Editor3DEngine {
+    constructor(canvasEl, containerEl) {
+      this.canvas = canvasEl;
+      this.container = containerEl;
+      this.worldScale = 1.8;
+
+      this.renderer = new THREE.WebGLRenderer({
+        canvas: this.canvas,
+        antialias: true,
+        alpha: false
+      });
+      this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      this.scene = new THREE.Scene();
+      this.scene.background = new THREE.Color(0x06060c);
+      this.scene.fog = new THREE.FogExp2(0x06060c, 0.001);
+
+      this.camera = new THREE.PerspectiveCamera(
+        55,
+        (this.container.clientWidth || 800) / (this.container.clientHeight || 600),
+        1,
+        2500
+      );
+      this.camera.position.set(0, 320, 380);
+
+      if (window.THREE.OrbitControls) {
+        this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.08;
+        this.controls.maxPolarAngle = Math.PI / 2 - 0.02;
+        this.controls.minDistance = 20;
+        this.controls.maxDistance = 1400;
+        this.controls.target.set(0, 0, 0);
+      }
+
+      this.setupLights();
+
+      this.trackGroup = new THREE.Group();
+      this.objectsGroup = new THREE.Group();
+      this.terrainGroup = new THREE.Group();
+      this.mountainsGroup = new THREE.Group();
+
+      this.scene.add(this.terrainGroup);
+      this.scene.add(this.trackGroup);
+      this.scene.add(this.mountainsGroup);
+      this.scene.add(this.objectsGroup);
+
+      this.isAnimating = false;
+      this.startAnimation();
+
+      window.addEventListener('resize', () => this.resize());
+    }
+
+    setupLights() {
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x110508, 0.55);
+      hemiLight.position.set(0, 200, 0);
+      this.scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffe8e8, 0.9);
+      dirLight.position.set(200, 350, 150);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 1024;
+      dirLight.shadow.mapSize.height = 1024;
+      const d = 400;
+      dirLight.shadow.camera.left = -d; dirLight.shadow.camera.right = d;
+      dirLight.shadow.camera.top = d; dirLight.shadow.camera.bottom = -d;
+      this.scene.add(dirLight);
+
+      const redAmbient = new THREE.AmbientLight(0xa30000, 0.25);
+      this.scene.add(redAmbient);
+    }
+
+    resetCamera() {
+      this.camera.position.set(0, 320, 380);
+      if (this.controls) {
+        this.controls.target.set(0, 0, 0);
+        this.controls.update();
+      }
+    }
+
+    topCamera() {
+      this.camera.position.set(0, 650, 1);
+      if (this.controls) {
+        this.controls.target.set(0, 0, 0);
+        this.controls.update();
+      }
+    }
+
+    trackCamera() {
+      if (controlPoints.length > 0) {
+        const p0 = controlPoints[0];
+        const p1 = controlPoints[1] || controlPoints[0];
+        const cx = p0.x * this.worldScale;
+        const cy = (p0.y || 0) * this.worldScale + 4;
+        const cz = p0.z * this.worldScale;
+        const tx = p1.x * this.worldScale;
+        const tz = p1.z * this.worldScale;
+        this.camera.position.set(cx, cy + 6, cz);
+        if (this.controls) {
+          this.controls.target.set(tx, cy + 2, tz);
+          this.controls.update();
+        }
+      }
+    }
+
+    resize() {
+      if (!this.container || !this.renderer) return;
+      const w = this.container.clientWidth;
+      const h = this.container.clientHeight;
+      if (w === 0 || h === 0) return;
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(w, h);
+    }
+
+    startAnimation() {
+      if (this.isAnimating) return;
+      this.isAnimating = true;
+      const animate = () => {
+        if (!this.isAnimating) return;
+        requestAnimationFrame(animate);
+        if (this.controls) this.controls.update();
+        this.renderer.render(this.scene, this.camera);
+      };
+      animate();
+    }
+
+    clearGroup(group) {
+      while (group.children.length > 0) {
+        const obj = group.children[0];
+        group.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+          else obj.material.dispose();
+        }
+      }
+    }
+
+    syncFrom2D() {
+      this.buildTerrain();
+      this.buildTrack();
+      this.buildObjects();
+      this.buildMountains();
+    }
+
+    buildTerrain() {
+      this.clearGroup(this.terrainGroup);
+
+      const groundGeo = new THREE.PlaneGeometry(1200, 1200, 100, 100);
+      const pos = groundGeo.attributes.position;
+      const count = pos.count;
+
+      for (let i = 0; i < count; i++) {
+        const vx = pos.getX(i);
+        const vy = pos.getY(i);
+        const wx = vx;
+        const wz = -vy;
+
+        let zh = 0;
+        for (const node of editorTerrainNodes) {
+          if (node.type === 'hill' || node.type === 'crater') {
+            const dx = wx - (node.x * this.worldScale);
+            const dz = wz - (node.z * this.worldScale);
+            const distSq = dx * dx + dz * dz;
+            const r = (node.radius || 40) * this.worldScale;
+            if (distSq < r * r) {
+              const t = 1 - Math.sqrt(distSq) / r;
+              const smoothT = t * t * (3 - 2 * t);
+              zh += (node.height || 10) * this.worldScale * smoothT;
+            }
+          }
+        }
+        pos.setZ(i, zh);
+      }
+      pos.needsUpdate = true;
+      groundGeo.computeVertexNormals();
+
+      const groundMat = new THREE.MeshStandardMaterial({
+        color: 0x0c0b15, roughness: 0.92, metalness: 0.1
+      });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      this.terrainGroup.add(ground);
+
+      const grid = new THREE.GridHelper(1200, 60, 0xa30000, 0x1c050a);
+      grid.position.y = 0.02;
+      this.terrainGroup.add(grid);
+    }
+
+    buildTrack() {
+      this.clearGroup(this.trackGroup);
+      if (controlPoints.length < 3) return;
+
+      const pts = controlPoints.map(p => new THREE.Vector3(
+        p.x * this.worldScale,
+        (p.y || 0) * this.worldScale,
+        p.z * this.worldScale
+      ));
+      const curve = new THREE.CatmullRomCurve3(pts, true);
+      const samplesCount = 600;
+      const samples = [];
+      const halfW = (trackWidth || 14) * (this.worldScale / 2);
+
+      for (let i = 0; i <= samplesCount; i++) {
+        const t = i / samplesCount;
+        const p = curve.getPointAt(t);
+        const tan = curve.getTangentAt(t).normalize();
+        const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
+        samples.push({ x: p.x, y: p.y, z: p.z, tan, normal, t });
+      }
+
+      // Asfalto
+      const roadGeo = new THREE.BufferGeometry();
+      const pos = [], uvs = [], indices = [];
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        pos.push(s.x + s.normal.x * halfW, s.y + 0.05, s.z + s.normal.z * halfW);
+        pos.push(s.x - s.normal.x * halfW, s.y + 0.05, s.z - s.normal.z * halfW);
+        uvs.push(0, s.t * 20); uvs.push(1, s.t * 20);
+        if (i < samples.length - 1) {
+          const v1 = i * 2, v2 = i * 2 + 1, v3 = (i + 1) * 2, v4 = (i + 1) * 2 + 1;
+          indices.push(v1, v3, v2); indices.push(v2, v3, v4);
+        }
+      }
+      roadGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      roadGeo.setIndex(indices);
+      roadGeo.computeVertexNormals();
+
+      const roadMat = new THREE.MeshStandardMaterial({
+        color: 0x181824, roughness: 0.75, metalness: 0.25, side: THREE.DoubleSide
+      });
+      const roadMesh = new THREE.Mesh(roadGeo, roadMat);
+      roadMesh.receiveShadow = true;
+      this.trackGroup.add(roadMesh);
+
+      // Línea central roja
+      const lineGeo = new THREE.TubeGeometry(curve, 300, 0.25, 4, true);
+      const lineMat = new THREE.MeshStandardMaterial({
+        color: 0xa30000, emissive: 0xa30000, emissiveIntensity: 1.4
+      });
+      const centerLine = new THREE.Mesh(lineGeo, lineMat);
+      centerLine.position.y = 0.08;
+      this.trackGroup.add(centerLine);
+
+      // Bordillos laterales neón
+      const curbMat = new THREE.MeshStandardMaterial({
+        color: 0x222222, emissive: 0xa30000, emissiveIntensity: 0.35, roughness: 0.5
+      });
+      const makeCurv = (dist) => {
+        const cPts = samples.map(s => new THREE.Vector3(s.x + s.normal.x * dist, s.y + 0.5, s.z + s.normal.z * dist));
+        const c = new THREE.CatmullRomCurve3(cPts, true);
+        const tg = new THREE.TubeGeometry(c, 300, 0.45, 6, true);
+        return new THREE.Mesh(tg, curbMat);
+      };
+      this.trackGroup.add(makeCurv(halfW + 1.2));
+      this.trackGroup.add(makeCurv(-(halfW + 1.2)));
+
+      // Meta
+      const s0 = samples[0];
+      const startGeo = new THREE.BoxGeometry(1.5, 0.1, halfW * 2);
+      const startMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+      const startMesh = new THREE.Mesh(startGeo, startMat);
+      startMesh.position.set(s0.x, s0.y + 0.1, s0.z);
+      startMesh.rotation.y = -Math.atan2(s0.tan.z, s0.tan.x);
+      this.trackGroup.add(startMesh);
+
+      // Atajos en 3D (pistas secundarias con bordillos y líneas)
+      const scRoadMat = new THREE.MeshStandardMaterial({
+        color: 0x221828, roughness: 0.8, metalness: 0.2, side: THREE.DoubleSide
+      });
+      const scLineMat = new THREE.MeshStandardMaterial({
+        color: 0xffaa00, emissive: 0xff8800, emissiveIntensity: 1.2
+      });
+      const scCurbMat = new THREE.MeshStandardMaterial({
+        color: 0x332211, emissive: 0xff8800, emissiveIntensity: 0.35, roughness: 0.5
+      });
+
+      for (const sc of editorShortcuts) {
+        const scGeom = getShortcutGeometry(sc);
+        if (!scGeom || scGeom.pts.length < 2) continue;
+
+        const sc3DPts = scGeom.pts.map(p => new THREE.Vector3(
+          p.x * this.worldScale,
+          0.06,
+          p.z * this.worldScale
+        ));
+        const scCurve = new THREE.CatmullRomCurve3(sc3DPts, false);
+        const scSamplesCount = Math.max(30, scGeom.pts.length * 15);
+        const scSamples = [];
+        const scHalfW = ((sc.width || trackWidth || 14) * 0.75) * (this.worldScale / 2);
+
+        for (let i = 0; i <= scSamplesCount; i++) {
+          const t = i / scSamplesCount;
+          const p = scCurve.getPointAt(t);
+          const tan = scCurve.getTangentAt(t).normalize();
+          const normal = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
+          scSamples.push({ x: p.x, y: p.y, z: p.z, tan, normal, t });
+        }
+
+        const scRoadGeo = new THREE.BufferGeometry();
+        const scPos = [], scUvs = [], scIndices = [];
+        for (let i = 0; i < scSamples.length; i++) {
+          const s = scSamples[i];
+          scPos.push(s.x + s.normal.x * scHalfW, s.y, s.z + s.normal.z * scHalfW);
+          scPos.push(s.x - s.normal.x * scHalfW, s.y, s.z - s.normal.z * scHalfW);
+          scUvs.push(0, s.t * 10); scUvs.push(1, s.t * 10);
+          if (i < scSamples.length - 1) {
+            const v1 = i * 2, v2 = i * 2 + 1, v3 = (i + 1) * 2, v4 = (i + 1) * 2 + 1;
+            scIndices.push(v1, v3, v2); scIndices.push(v2, v3, v4);
+          }
+        }
+        scRoadGeo.setAttribute('position', new THREE.Float32BufferAttribute(scPos, 3));
+        scRoadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(scUvs, 2));
+        scRoadGeo.setIndex(scIndices);
+        scRoadGeo.computeVertexNormals();
+
+        const scRoadMesh = new THREE.Mesh(scRoadGeo, scRoadMat);
+        scRoadMesh.receiveShadow = true;
+        this.trackGroup.add(scRoadMesh);
+
+        // Línea central dorada
+        const scLineGeo = new THREE.TubeGeometry(scCurve, scSamplesCount, 0.18, 4, false);
+        const scCenterLine = new THREE.Mesh(scLineGeo, scLineMat);
+        scCenterLine.position.y = 0.09;
+        this.trackGroup.add(scCenterLine);
+
+        // Bordillos neón naranja/dorado
+        const makeScCurb = (dist) => {
+          const cPts = scSamples.map(s => new THREE.Vector3(s.x + s.normal.x * dist, s.y + 0.35, s.z + s.normal.z * dist));
+          const c = new THREE.CatmullRomCurve3(cPts, false);
+          const tg = new THREE.TubeGeometry(c, scSamplesCount, 0.35, 6, false);
+          return new THREE.Mesh(tg, scCurbMat);
+        };
+        this.trackGroup.add(makeScCurb(scHalfW + 0.8));
+        this.trackGroup.add(makeScCurb(-(scHalfW + 0.8)));
+      }
+
+      this.samples = samples;
+      this.halfW = halfW;
+    }
+
+    buildObjects() {
+      this.clearGroup(this.objectsGroup);
+      if (!this.samples || this.samples.length < 2) return;
+
+      const samples = this.samples;
+      const TRACK_SAMPLES = 600;
+
+      // Obstáculos
+      const obsMat = new THREE.MeshStandardMaterial({ color: 0xdd3333, metalness: 0.5, roughness: 0.4 });
+      for (const obs of editorObstacles) {
+        const s = samples[Math.min(obs.sampleIdx, samples.length - 1)];
+        if (!s) continue;
+        const wx = s.x + s.normal.x * obs.lane * this.halfW;
+        const wz = s.z + s.normal.z * obs.lane * this.halfW;
+        const geo = new THREE.CylinderGeometry(1.8, 1.8, 3.2, 12);
+        const m = new THREE.Mesh(geo, obsMat);
+        m.position.set(wx, s.y + 1.6, wz);
+        m.castShadow = true;
+        this.objectsGroup.add(m);
+      }
+
+      // Rampas
+      const rampMat = new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0xff6600, emissiveIntensity: 0.4 });
+      for (const r of editorRamps) {
+        const s = samples[Math.min(r.sampleIdx, samples.length - 1)];
+        if (!s) continue;
+        const wx = s.x + s.normal.x * r.lane * this.halfW;
+        const wz = s.z + s.normal.z * r.lane * this.halfW;
+        const geo = new THREE.BoxGeometry(3.5, 1.2, 5.0);
+        const m = new THREE.Mesh(geo, rampMat);
+        m.position.set(wx, s.y + 0.6, wz);
+        m.rotation.y = -Math.atan2(s.tan.z, s.tan.x);
+        m.castShadow = true;
+        this.objectsGroup.add(m);
+      }
+
+      // Power-ups
+      for (const pu of editorPowerups) {
+        const s = samples[Math.min(pu.sampleIdx, samples.length - 1)];
+        if (!s) continue;
+        const wx = s.x + s.normal.x * pu.lane * this.halfW;
+        const wz = s.z + s.normal.z * pu.lane * this.halfW;
+        const col = pu.type === 'homing' ? 0xff2244 : (pu.type === 'boost' ? 0xffcc00 : 0x00ff66);
+        const mat = new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.9 });
+        const geo = new THREE.SphereGeometry(1.6, 16, 16);
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(wx, s.y + 2.5, wz);
+        this.objectsGroup.add(m);
+      }
+
+      // Barreras
+      const barrierMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.5 });
+      for (const b of editorBarriers) {
+        const p1 = new THREE.Vector3(b.start.x * this.worldScale, 1.5, b.start.z * this.worldScale);
+        const p2 = new THREE.Vector3(b.end.x * this.worldScale, 1.5, b.end.z * this.worldScale);
+        const c = new THREE.LineCurve3(p1, p2);
+        const geo = new THREE.TubeGeometry(c, 16, 0.6, 6, false);
+        const m = new THREE.Mesh(geo, barrierMat);
+        this.objectsGroup.add(m);
+      }
+    }
+
+    buildMountains() {
+      this.clearGroup(this.mountainsGroup);
+      for (const node of editorTerrainNodes) {
+        if (node.type === 'mountain' || node.type === 'mountain_tunnel' || node.hasHole) {
+          const m = createEditorMountainMesh(node, this.worldScale);
+          this.mountainsGroup.add(m);
+        }
+      }
+    }
+  }
+
+  function createEditorMountainMesh(node, worldScale = 1.8) {
+    const group = new THREE.Group();
+    const radius = (node.radius || 50) * worldScale;
+    const height = Math.max(16, (node.height || 45) * worldScale);
+    const holeWidth = Math.max(12, (node.holeWidth || 22) * worldScale);
+    const holeHeight = Math.min(height * 0.75, Math.max(8, (node.holeHeight || 16) * worldScale));
+    const angleRad = ((node.holeAngle || 0) * Math.PI) / 180;
+
+    const rockMat = new THREE.MeshStandardMaterial({
+      color: 0x18101a, roughness: 0.95, metalness: 0.15, flatShading: true
+    });
+    const neonPortalMat = new THREE.MeshStandardMaterial({
+      color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.85, roughness: 0.2
+    });
+
+    if (node.hasHole || node.type === 'mountain_tunnel') {
+      const flankOffset = (holeWidth / 2) + (radius * 0.32);
+      const flankGeo = new THREE.ConeGeometry(radius * 0.55, height, 6);
+
+      const leftFlank = new THREE.Mesh(flankGeo, rockMat);
+      leftFlank.position.set(-Math.sin(angleRad + Math.PI/2) * flankOffset, height / 2, Math.cos(angleRad + Math.PI/2) * flankOffset);
+      leftFlank.castShadow = true;
+      leftFlank.receiveShadow = true;
+      group.add(leftFlank);
+
+      const rightFlank = new THREE.Mesh(flankGeo, rockMat);
+      rightFlank.position.set(Math.sin(angleRad + Math.PI/2) * flankOffset, height / 2, -Math.cos(angleRad + Math.PI/2) * flankOffset);
+      rightFlank.castShadow = true;
+      rightFlank.receiveShadow = true;
+      group.add(rightFlank);
+
+      const archThickness = Math.max(6, height - holeHeight);
+      const archGeo = new THREE.BoxGeometry(holeWidth * 1.5, archThickness, radius * 1.5);
+      const archMesh = new THREE.Mesh(archGeo, rockMat);
+      archMesh.position.set(0, holeHeight + archThickness / 2, 0);
+      archMesh.rotation.y = -angleRad;
+      archMesh.castShadow = true;
+      archMesh.receiveShadow = true;
+      group.add(archMesh);
+
+      const tunnelGeo = new THREE.CylinderGeometry(holeWidth * 0.52, holeWidth * 0.52, radius * 1.8, 12, 1, true);
+      const tunnelMat = new THREE.MeshStandardMaterial({
+        color: 0x0f0b12, roughness: 0.95, side: THREE.BackSide
+      });
+      const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+      tunnelMesh.position.set(0, holeHeight * 0.55, 0);
+      tunnelMesh.rotation.x = Math.PI / 2;
+      tunnelMesh.rotation.z = -angleRad;
+      group.add(tunnelMesh);
+
+      const portalGeo = new THREE.TorusGeometry(holeWidth * 0.54, 0.45, 8, 16, Math.PI);
+      const forwardX = Math.cos(angleRad) * (radius * 0.85);
+      const forwardZ = Math.sin(angleRad) * (radius * 0.85);
+
+      const entrancePortal = new THREE.Mesh(portalGeo, neonPortalMat);
+      entrancePortal.position.set(forwardX, holeHeight * 0.5, forwardZ);
+      entrancePortal.rotation.y = -angleRad + Math.PI / 2;
+      group.add(entrancePortal);
+
+      const exitPortal = new THREE.Mesh(portalGeo, neonPortalMat);
+      exitPortal.position.set(-forwardX, holeHeight * 0.5, -forwardZ);
+      exitPortal.rotation.y = -angleRad - Math.PI / 2;
+      group.add(exitPortal);
+
+    } else {
+      const coneGeo = new THREE.ConeGeometry(radius, height, 7);
+      const cone = new THREE.Mesh(coneGeo, rockMat);
+      cone.position.set(0, height / 2, 0);
+      cone.rotation.y = Math.random() * Math.PI;
+      cone.castShadow = true;
+      cone.receiveShadow = true;
+      group.add(cone);
+    }
+
+    group.position.set((node.x || 0) * worldScale, 0, (node.z || 0) * worldScale);
+    return group;
   }
 
 })();

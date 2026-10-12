@@ -485,28 +485,40 @@
       .sk-hud-missiles { bottom: 12px; left: 12px; }
       .sk-hud-controls { display: none; /* Ocultar textos de teclado */ }
       #hud-action-bar { transform: scale(0.8); transform-origin: top left; top: 8px; left: 8px; }
-      
-      /* Botón full screen visible */
-      #btn-fullscreen-mobile { display: flex !important; }
+    }
+
+    /* Estilos para Pantalla Dividida (Split Mode) */
+    body.is-split-mode #hud-action-bar,
+    body.is-split-mode #touch-controls,
+    body.is-split-mode .sk-hud-controls {
+      display: none !important;
+    }
+    body.is-split-mode #hud-minimap {
+      transform: scale(0.85);
+      transform-origin: top left;
     }
 
   </style>
   <link rel="icon" type="image/x-icon" href="/logo_blanco.ico">
 </head>
 <body>
+  <script>
+    // Detectar si la entrada es directa a partida (split screen o autoJoin)
+    (function() {
+      const p = new URLSearchParams(window.location.search);
+      window._isDirectRace = p.get('splitMode') === '1' || !!p.get('autoJoin') || window.sessionStorage.getItem('sk_hide_menu') === '1';
+    })();
+  </script>
 
   <!-- Pantalla de carga -->
-  <div id="loading-screen">
+  <div id="loading-screen" style="display:none;">
     <div class="ls-logo">SPIDER<span>KART</span></div>
-    <div class="ls-sub">CARGANDO ARENA 3D...</div>
+    <div class="ls-sub" id="ls-sub-text">CARGANDO ARENA 3D...</div>
     <div class="ls-bar-wrap"><div class="ls-bar" id="ls-bar"></div></div>
   </div>
 
-  <!-- Botón de regreso al portal -->
-  <a href="/" id="btn-back-portal"><i class="fa-solid fa-arrow-left"></i> PORTAL</a>
-
   <!-- Menú Principal -->
-  <div id="main-menu" style="display:none; position:fixed; inset:0; z-index:180; background:radial-gradient(circle at center, rgba(30,10,10,0.8) 0%, rgba(10,5,10,0.95) 100%); align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(8px);">
+  <div id="main-menu" style="display:flex; position:fixed; inset:0; z-index:180; background:radial-gradient(circle at center, rgba(30,10,10,0.8) 0%, rgba(10,5,10,0.95) 100%); align-items:center; justify-content:center; flex-direction:column; backdrop-filter:blur(8px);">
     <!-- Grid Animado de Fondo -->
     <div style="position:absolute; inset:0; z-index:-1; overflow:hidden; opacity:0.3; pointer-events:none;">
       <div style="width:200%; height:200%; position:absolute; bottom:-50%; left:-50%; background-image: linear-gradient(rgba(163,0,0,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(163,0,0,0.2) 1px, transparent 1px); background-size: 50px 50px; transform: perspective(500px) rotateX(60deg); animation: moveGrid 5s linear infinite;"></div>
@@ -519,13 +531,26 @@
       .mm-btn:hover::before { left:100%; }
       .mm-btn i { margin-right:10px; color:#ff6666; transition:color 0.3s; }
       .mm-btn:hover i { color:#fff; }
-      .mm-logo { color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:5.5rem; margin-bottom:50px; letter-spacing:4px; text-shadow:0 0 30px rgba(163,0,0,0.9), 0 0 10px rgba(255,255,255,0.2); animation: logoPulse 2s infinite alternate; }
+      .mm-logo { color:#f5f5f5; font-family:'Barlow Condensed',sans-serif; font-size:5rem; margin-bottom:15px; letter-spacing:4px; text-shadow:0 0 30px rgba(163,0,0,0.9), 0 0 10px rgba(255,255,255,0.2); animation: logoPulse 2s infinite alternate; }
       @keyframes logoPulse { from { text-shadow:0 0 20px rgba(163,0,0,0.6); } to { text-shadow:0 0 40px rgba(255,51,51,0.9); } }
     </style>
 
     <h1 class="mm-logo">SPIDER<span style="color:#ff3333;">KART</span></h1>
     
-    <div id="mm-buttons" style="display:flex; flex-direction:column; gap:25px; width:340px;">
+    <!-- Tarjeta Informativa de Pista/Circuito Activo -->
+    <div id="mm-circuit-card" style="display:flex; align-items:center; justify-content:center; gap:16px; background:rgba(20,5,5,0.7); border:1px solid rgba(163,0,0,0.5); padding:8px 24px; border-radius:4px; margin-bottom:28px; font-size:0.85rem; letter-spacing:0.12em; color:#fff; box-shadow:0 0 15px rgba(163,0,0,0.25); backdrop-filter:blur(4px);">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <i class="fa-solid fa-flag-checkered" style="color:#ff3333; font-size:0.95rem;"></i>
+        <span id="mm-circuit-name" style="font-weight:700; color:#f0f0f0;">CARGANDO CIRCUITO...</span>
+      </div>
+      <span style="color:rgba(255,255,255,0.3);">|</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <i class="fa-solid fa-rotate" style="color:#ffaa00; font-size:0.85rem;"></i>
+        <span id="mm-circuit-laps" style="color:#ffd700; font-weight:700;">-- VUELTAS</span>
+      </div>
+    </div>
+
+    <div id="mm-buttons" style="display:flex; flex-direction:column; gap:22px; width:340px;">
       <button id="btn-best-lap" class="mm-btn"><i class="fa-solid fa-stopwatch"></i> MEJOR VUELTA</button>
       <button id="btn-split-screen" class="mm-btn" onclick="location.href='/split.html'"><i class="fa-solid fa-users"></i> PANTALLA DIVIDIDA</button>
       <button id="btn-multiplayer" class="mm-btn"><i class="fa-solid fa-globe"></i> MULTIJUGADOR</button>
@@ -548,6 +573,26 @@
       <button id="btn-back-mm" style="background:none; border:none; color:rgba(255,255,255,0.5); font-size:0.8rem; font-family:inherit; margin-top:20px; cursor:pointer;"><i class="fa-solid fa-arrow-left"></i> VOLVER AL MENÚ</button>
     </div>
   </div>
+
+  <script>
+    if (window._isDirectRace) {
+      document.getElementById('loading-screen').style.display = 'flex';
+      document.getElementById('main-menu').style.display = 'none';
+    }
+    // Cargar metadatos de pista activa para el menú
+    (async function fetchLevelInfo() {
+      try {
+        const res = await fetch('/api/level');
+        if (res.ok) {
+          const lvl = await res.json();
+          const nameEl = document.getElementById('mm-circuit-name');
+          const lapsEl = document.getElementById('mm-circuit-laps');
+          if (nameEl && lvl.name) nameEl.textContent = lvl.name.toUpperCase();
+          if (lapsEl && lvl.totalLaps) lapsEl.textContent = `${lvl.totalLaps} VUELTAS`;
+        }
+      } catch (_) {}
+    })();
+  </script>
   <!-- Modal Ajustes -->
   <div id="settings-modal" style="display:none; position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.85); align-items:center; justify-content:center; backdrop-filter:blur(5px); flex-direction:column;">
     <div style="background:rgba(10,10,18,0.95); border:1px solid rgba(163,0,0,0.5); padding:30px; border-radius:6px; width:320px; box-shadow:0 0 30px rgba(163,0,0,0.3); text-align:center;">
@@ -756,19 +801,45 @@
       loadPct = Math.min(loadPct + Math.random() * 15, 88);
       if (lsBar) lsBar.style.width = loadPct + '%';
     }, 100);
+
     window._finishLoading = function() {
       clearInterval(lsInterval);
       if (lsBar) lsBar.style.width = '100%';
-      setTimeout(() => {
-        if (lsScreen) { lsScreen.style.transition = 'opacity 0.5s'; lsScreen.style.opacity = '0'; }
-        setTimeout(() => { 
+      if (window._isDirectRace) {
+        setTimeout(() => {
+          if (lsScreen) { lsScreen.style.transition = 'opacity 0.4s'; lsScreen.style.opacity = '0'; }
+          setTimeout(() => { 
             if (lsScreen) lsScreen.style.display = 'none'; 
-            const mm = document.getElementById('main-menu');
-            if (mm && (!window.sessionStorage.getItem('sk_hide_menu'))) {
-                mm.style.display = 'flex';
-            }
-        }, 500);
-      }, 300);
+          }, 400);
+        }, 200);
+      }
+    };
+
+    // Feedback táctico de carga al seleccionar un modo
+    window.showModeLoading = function(title, callback) {
+      if (!lsScreen) { if (callback) callback(); return; }
+      const lsSub = document.getElementById('ls-sub-text');
+      if (lsSub) lsSub.textContent = title || 'PREPARANDO CARRERA...';
+      if (lsBar) lsBar.style.width = '0%';
+      lsScreen.style.display = 'flex';
+      lsScreen.style.opacity = '1';
+      lsScreen.style.transition = 'opacity 0.25s ease';
+      
+      let p = 0;
+      const t = setInterval(() => {
+        p = Math.min(p + 35, 100);
+        if (lsBar) lsBar.style.width = p + '%';
+        if (p >= 100) {
+          clearInterval(t);
+          setTimeout(() => {
+            lsScreen.style.opacity = '0';
+            setTimeout(() => {
+              lsScreen.style.display = 'none';
+              if (callback) callback();
+            }, 250);
+          }, 100);
+        }
+      }, 50);
     };
 
     // --- LÓGICA DE AJUSTES ---

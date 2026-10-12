@@ -220,6 +220,64 @@
       padding-right: 1.8rem;
     }
     select.sw-input option { background: #121212; color: #F5F5F5; }
+
+    /* ── 3D Viewport & Mode Switcher ── */
+    #view-mode-bar {
+      position: absolute; top: 12px; left: 16px; z-index: 35;
+      display: flex; gap: 4px; align-items: center;
+      background: rgba(10, 10, 15, 0.88); backdrop-filter: blur(10px);
+      border: 1px solid var(--sw-border);
+      clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+      padding: 4px 6px;
+    }
+    .vmb-btn {
+      background: transparent; border: 1px solid transparent;
+      color: rgba(var(--text-primary-rgb), 0.6);
+      font-family: var(--sw-font-m); font-size: 0.65rem; letter-spacing: 0.08em;
+      padding: 0.35rem 0.65rem; cursor: pointer; transition: all 0.15s ease;
+      clip-path: polygon(0 0, calc(100% - 4px) 0, 100% 4px, 100% 100%, 4px 100%, 0 calc(100% - 4px));
+      display: flex; align-items: center; gap: 5px;
+    }
+    .vmb-btn:hover { background: rgba(163,0,0,0.15); color: var(--sw-white); }
+    .vmb-btn.active {
+      background: rgba(163, 0, 0, 0.35); border-color: var(--sw-red);
+      color: var(--sw-white); box-shadow: 0 0 10px rgba(163,0,0,0.3);
+    }
+    .vmb-btn.vmb-icon { padding: 0.35rem 0.5rem; }
+    .vmb-sep { opacity: 0.25; margin: 0 3px; font-size: 0.7rem; color: var(--sw-border); }
+
+    #viewport-3d {
+      width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 5;
+    }
+    #viewport-3d.hidden { display: none !important; }
+    #three-canvas { width: 100%; height: 100%; display: block; outline: none; }
+    #hud-3d-hint {
+      position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; align-items: center;
+      background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+      border: 1px solid var(--sw-border);
+      clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+      padding: 0.45rem 1rem;
+      font-family: var(--sw-font-m); font-size: 0.6rem; letter-spacing: 0.08em;
+      color: rgba(var(--text-primary-rgb), 0.6); pointer-events: none; white-space: nowrap;
+    }
+    #hud-3d-hint kbd {
+      background: rgba(163, 0, 0, 0.25); border: 1px solid var(--sw-border);
+      padding: 1px 6px; font-family: var(--sw-font-m); font-size: 0.58rem;
+      color: rgba(var(--text-primary-rgb), 0.9);
+    }
+
+    /* Split Mode */
+    #canvas-area.split-view {
+      display: flex; flex-direction: row;
+    }
+    #canvas-area.split-view #track-canvas {
+      width: 50% !important; height: 100% !important; flex: 1; border-right: 1px solid var(--sw-border);
+    }
+    #canvas-area.split-view #viewport-3d {
+      position: relative !important; width: 50% !important; height: 100% !important; flex: 1;
+      display: block !important;
+    }
   </style>
 </head>
 <body class="tac-page">
@@ -380,28 +438,63 @@
         <p class="sw-point-count" id="point-count">0 puntos de control</p>
       </div>
 
-      <!-- Terreno y Elevaciones -->
+      <!-- Terreno y Montañas -->
       <div class="sw-section">
-        <div class="sw-section-title">// Terreno y Elevación</div>
+        <div class="sw-section-title">// Terreno y Montañas</div>
         <div class="sw-field">
-          <div class="sw-range-label">
-            <span>Altura (Elevación)</span>
-            <b id="node-height-val">10</b>
-          </div>
-          <input type="range" id="node-height" min="-50" max="100" step="1" value="10" />
+          <label class="sw-label" for="terrain-type">Tipo de Estructura</label>
+          <select id="terrain-type" class="sw-input" style="padding:0.4rem 0.6rem;">
+            <option value="mountain_tunnel">⛰️ Montaña con Túnel (Paso)</option>
+            <option value="mountain">🏔️ Montaña Rocosa Sólida</option>
+            <option value="hill">🟢 Colina de Relieve</option>
+            <option value="crater">🕳️ Cráter / Pozo</option>
+          </select>
         </div>
         <div class="sw-field">
           <div class="sw-range-label">
-            <span>Radio (Terreno)</span>
-            <b id="node-radius-val">40</b>
+            <span>Altura</span>
+            <b id="node-height-val">45</b>
           </div>
-          <input type="range" id="node-radius" min="10" max="150" step="5" value="40" />
+          <input type="range" id="node-height" min="-40" max="120" step="5" value="45" />
         </div>
-        <button class="sw-tool-btn" id="tool-elevate">
-          <i class="fa fa-arrows-alt-v"></i> Pista: Altura
-        </button>
+        <div class="sw-field">
+          <div class="sw-range-label">
+            <span>Radio Base</span>
+            <b id="node-radius-val">50</b>
+          </div>
+          <input type="range" id="node-radius" min="15" max="150" step="5" value="50" />
+        </div>
+
+        <!-- Parámetros específicos de Túnel/Agujero -->
+        <div id="tunnel-controls">
+          <div class="sw-field">
+            <div class="sw-range-label">
+              <span>Ancho Túnel</span>
+              <b id="tunnel-width-val">22</b> u
+            </div>
+            <input type="range" id="tunnel-width" min="12" max="45" step="1" value="22" />
+          </div>
+          <div class="sw-field">
+            <div class="sw-range-label">
+              <span>Altura Arco</span>
+              <b id="tunnel-height-val">16</b> u
+            </div>
+            <input type="range" id="tunnel-height" min="8" max="30" step="1" value="16" />
+          </div>
+          <div class="sw-field">
+            <div class="sw-range-label">
+              <span>Ángulo de Paso</span>
+              <b id="tunnel-angle-val">0°</b>
+            </div>
+            <input type="range" id="tunnel-angle" min="0" max="359" step="5" value="0" />
+          </div>
+          <button class="sw-tool-btn" id="btn-align-tunnel" style="margin-top:2px;">
+            <i class="fa fa-compass"></i> Alinear Túnel a Pista
+          </button>
+        </div>
+
         <button class="sw-tool-btn" id="tool-terrain-add">
-          <i class="fa fa-mountain"></i> Añadir montaña/hueco
+          <i class="fa fa-mountain"></i> Añadir montaña/terreno
         </button>
         <button class="sw-tool-btn danger" id="tool-terrain-delete">
           <i class="fa fa-eraser"></i> Eliminar terreno
@@ -409,6 +502,10 @@
         <button class="sw-tool-btn danger" id="btn-clear-terrain">
           <i class="fa fa-trash-alt"></i> Limpiar terreno
         </button>
+        <button class="sw-tool-btn" id="tool-elevate">
+          <i class="fa fa-arrows-alt-v"></i> Pista: Elevar Punto
+        </button>
+        <p class="sw-point-count" id="terrain-count">0 estructuras de terreno</p>
       </div>
 
       <!-- Atajos -->
@@ -423,6 +520,10 @@
         <button class="sw-tool-btn danger" id="btn-clear-shortcuts">
           <i class="fa fa-trash-alt"></i> Limpiar atajos
         </button>
+        <p class="sw-point-count" id="shortcut-count">0 atajos</p>
+        <p style="font-size:0.75rem; color:rgba(245,245,245,0.45); margin:0.3rem 0; line-height:1.2;">
+          💡 En modo Mover podés arrastrar las anclas ⚓/🎯 y los puntos intermedios CP para editar cualquier atajo.
+        </p>
       </div>
 
       <!-- Barreras (Topes) -->
@@ -533,6 +634,9 @@
         <a href="/" target="_blank" class="sw-tool-btn" style="text-decoration:none">
           <i class="fa fa-home"></i> Portal Principal
         </a>
+        <button class="sw-tool-btn danger" id="btn-logout" style="margin-top:0.25rem;">
+          <i class="fa fa-sign-out-alt"></i> Cerrar Sesión
+        </button>
       </div>
 
       <!-- Status -->
@@ -544,7 +648,32 @@
 
     <!-- Canvas area -->
     <div id="canvas-area">
+      <!-- 2D / 3D Mode Bar -->
+      <div id="view-mode-bar">
+        <button class="vmb-btn active" id="btn-view-2d" title="Modo 2D (Diseño vectorial)"><i class="fa fa-map"></i> 2D PLANO</button>
+        <button class="vmb-btn" id="btn-view-3d" title="Modo 3D (Vista Previa interactiva)"><i class="fa fa-cube"></i> 3D PREVIA</button>
+        <button class="vmb-btn" id="btn-view-split" title="Vista Dividida (2D + 3D)"><i class="fa fa-columns"></i> SPLIT</button>
+        <span class="vmb-sep">|</span>
+        <button class="vmb-btn vmb-icon" id="btn-cam-reset" title="Restablecer Cámara 3D"><i class="fa fa-crosshairs"></i></button>
+        <button class="vmb-btn vmb-icon" id="btn-cam-top" title="Vista Cenital 3D (Superior)"><i class="fa fa-eye"></i></button>
+        <button class="vmb-btn vmb-icon" id="btn-cam-track" title="Vista a ras de Pista"><i class="fa fa-road"></i></button>
+      </div>
+
       <canvas id="track-canvas"></canvas>
+
+      <!-- 3D Viewport Container -->
+      <div id="viewport-3d" class="hidden">
+        <canvas id="three-canvas"></canvas>
+        <div id="hud-3d-hint">
+          <kbd>Click+Arrastrar</kbd> Rotar
+          <span class="hint-sep">|</span>
+          <kbd>Scroll</kbd> Zoom
+          <span class="hint-sep">|</span>
+          <kbd>Click Der / Shift</kbd> Paneo
+          <span class="hint-sep">|</span>
+          <kbd>V</kbd> Alternar 2D/3D
+        </div>
+      </div>
 
       <!-- Hint bar -->
       <div id="canvas-hint">
@@ -555,6 +684,8 @@
         <kbd>Scroll</kbd> zoom
         <span class="hint-sep">|</span>
         <kbd>Space+Drag</kbd> paneo
+        <span class="hint-sep">|</span>
+        <kbd>V</kbd> Vista 3D
         <span class="hint-sep">|</span>
         <kbd>Del</kbd> borrar seleccionado
       </div>
@@ -578,6 +709,9 @@
 
   </div><!-- /#editor-screen -->
 
+  <!-- Three.js + OrbitControls for 3D Viewport -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="/js/editor.js"></script>
 </body>
 </html>

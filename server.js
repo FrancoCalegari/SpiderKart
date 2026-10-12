@@ -32,6 +32,9 @@ const SPIDER_DB_NAME = process.env.spiderdbname;
 
 // Admin
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+if (!ADMIN_TOKEN) {
+    console.warn('⚠️  [ADVERTENCIA] ADMIN_TOKEN no está definido en el archivo .env. El editor de niveles (/admin) rechazará accesos.');
+}
 const LEVELS_FILE = join(__dirname, 'levels.json');
 const LEVELS_SLOTS_FILE = join(__dirname, 'levels_slots.json');
 
@@ -60,6 +63,9 @@ function writeSlotsStore(store) {
 
 // Middleware de autenticación para /admin
 function requireAdmin(req, res, next) {
+    if (!ADMIN_TOKEN) {
+        return res.status(500).json({ error: 'ADMIN_TOKEN no está configurado en el servidor (.env).' });
+    }
     const token = req.headers['x-admin-token'] || req.query.token;
     if (token === ADMIN_TOKEN) return next();
     res.status(401).json({ error: 'No autorizado. Token inválido.' });
@@ -261,8 +267,11 @@ app.post('/api/level/activate', requireAdmin, async (req, res) => {
 
 // POST /api/admin/login — verificar token de admin
 app.post('/api/admin/login', (req, res) => {
+    if (!ADMIN_TOKEN) {
+        return res.status(500).json({ ok: false, error: 'ADMIN_TOKEN no está configurado en las variables de entorno del servidor (.env).' });
+    }
     const { token } = req.body;
-    if (token === ADMIN_TOKEN) {
+    if (token && token === ADMIN_TOKEN) {
         res.json({ ok: true });
     } else {
         res.status(401).json({ ok: false, error: 'Token incorrecto.' });
@@ -642,45 +651,60 @@ function handleLeave(socket) {
 function startCountdown(roomName) {
     const room = rooms[roomName];
     if (!room) return;
-    
-    room.phase = 'lobby_wait';
-    room.lobbySeconds = 5;
-    broadcastToRoom(roomName, { type: 'lobby_wait', seconds: room.lobbySeconds });
-    
-    room.countdownInterval = setInterval(() => {
-        room.lobbySeconds--;
-        if (room.lobbySeconds > 0) {
-            broadcastToRoom(roomName, { type: 'lobby_wait', seconds: room.lobbySeconds });
-        } else {
-            clearInterval(room.countdownInterval);
-            
-            room.phase = 'countdown';
-            room.countdown = 5;
-            
-            room.players.forEach((p, idx) => { p.startPosition = idx; });
-            
-            broadcastToRoom(roomName, { 
-                type: 'countdown', 
-                seconds: room.countdown,
-                players: room.players.map(p => ({ id: p.id, startPosition: p.startPosition }))
-            });
-            
-            room.countdownInterval = setInterval(() => {
-                room.countdown--;
-                if (room.countdown > 0) {
-                    broadcastToRoom(roomName, { type: 'countdown', seconds: room.countdown });
+    if (room.countdownInterval) clearInterval(room.countdownInterval);
+
+    const isSplit = roomName.startsWith('SPLIT_');
+
+    function beginRaceCountdown() {
+        if (room.countdownInterval) clearInterval(room.countdownInterval);
+        room.phase = 'countdown';
+        room.countdown = 3;
+        
+        room.players.forEach((p, idx) => { p.startPosition = idx; });
+        
+        broadcastToRoom(roomName, { 
+            type: 'countdown', 
+            seconds: room.countdown,
+            players: room.players.map(p => ({ id: p.id, startPosition: p.startPosition }))
+        });
+        
+        room.countdownInterval = setInterval(() => {
+            room.countdown--;
+            if (room.countdown > 0) {
+                broadcastToRoom(roomName, { type: 'countdown', seconds: room.countdown });
+            } else {
+                clearInterval(room.countdownInterval);
+                room.countdownInterval = null;
+                if (room.players.length > 0) {
+                    room.phase = 'racing';
+                    broadcastToRoom(roomName, { type: 'race_start', laps: room.laps });
                 } else {
-                    clearInterval(room.countdownInterval);
-                    if (room.players.length > 0) {
-                        room.phase = 'racing';
-                        broadcastToRoom(roomName, { type: 'race_start', laps: room.laps });
-                    } else {
-                        room.phase = 'waiting';
-                    }
+                    room.phase = 'waiting';
                 }
-            }, 1000);
-        }
-    }, 1000);
+            }
+        }, 1000);
+    }
+
+    if (isSplit) {
+        // En modo pantalla dividida, todos los jugadores ya están presentes: largada directa sin espera de lobby
+        beginRaceCountdown();
+    } else {
+        // En salas online, dar 5s de lobby antes del conteo de largada
+        room.phase = 'lobby_wait';
+        room.lobbySeconds = 5;
+        broadcastToRoom(roomName, { type: 'lobby_wait', seconds: room.lobbySeconds });
+        
+        room.countdownInterval = setInterval(() => {
+            room.lobbySeconds--;
+            if (room.lobbySeconds > 0) {
+                broadcastToRoom(roomName, { type: 'lobby_wait', seconds: room.lobbySeconds });
+            } else {
+                clearInterval(room.countdownInterval);
+                room.countdownInterval = null;
+                beginRaceCountdown();
+            }
+        }, 1000);
+    }
 }
 
 function checkRaceFinish(roomName) {
@@ -788,7 +812,8 @@ io.on('connection', (socket) => {
                         id, name, color
                     }, socket);
 
-                    const effectiveMin = isSplitRoom ? 1 : MIN_PLAYERS;
+                    const expectedSplit = (data.splitPlayers && data.splitPlayers >= 2) ? data.splitPlayers : 2;
+                    const effectiveMin = isSplitRoom ? expectedSplit : MIN_PLAYERS;
 
                     if (room.phase === 'waiting' && room.players.length >= effectiveMin) {
                         startCountdown(roomName);

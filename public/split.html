@@ -72,9 +72,9 @@
   </div>
 
   <div class="hint">
-    <span>P1:</span> WASD · E misil · X turbo · ESPACIO derrape<br>
-    <span>P2 teclado:</span> Flechas · . misil · , turbo<br>
-    <span>P2–P4 mando:</span> Asigna arriba con el selector
+    <span>P1 teclado:</span> WASD · ESPACIO derrape · E/Q misil · X/C turbo<br>
+    <span>P2 teclado:</span> Flechas/Numpad · SHIFT DER./M/ENTER derrape · . misil · , turbo<br>
+    <span>P1–P4 mando:</span> Asigna arriba con el selector (D-Pad o Sticks)
   </div>
 
   <div class="btn-row" style="margin-top:20px">
@@ -122,23 +122,42 @@ try {
 } catch(_) {}
 
 // ══════════════════════════════════════════════════
-// Keyboard routing — captured here, forwarded via postMessage
-// P1: WASD · Space=jump · E=missile · X=power
-// P2: Arrows · Comma=power · Period=missile
+// Keyboard routing — captured locally and via postMessage
+// P1: WASD · Space/KeyQ=jump · E=missile · X/C=power
+// P2: Arrows/Numpad · ShiftRight/Slash/M/Enter=jump · Comma=power · Period=missile
 // ══════════════════════════════════════════════════
 const KEY_MAP = {
+  // P1 (WASD)
   KeyW:{ p:0, a:'forward'  }, KeyS:{ p:0, a:'backward' },
   KeyA:{ p:0, a:'left'     }, KeyD:{ p:0, a:'right'    },
-  Space:{ p:0, a:'jump'    }, KeyE:{ p:0, a:'missile'  },
-  KeyX:{ p:0, a:'power'    },
-  ArrowUp:{ p:1, a:'forward'  }, ArrowDown:{ p:1, a:'backward' },
-  ArrowLeft:{ p:1, a:'left'   }, ArrowRight:{ p:1, a:'right'   },
-  Comma:{ p:1, a:'power'   }, Period:{ p:1, a:'missile' },
+  Space:{ p:0, a:'jump'    },
+  KeyE:{ p:0, a:'missile'  }, KeyQ:{ p:0, a:'missile'  },
+  KeyX:{ p:0, a:'power'    }, KeyC:{ p:0, a:'power'    }, KeyF:{ p:0, a:'power' },
+
+  // P2 (Flechas y Numpad)
+  ArrowUp:{ p:1, a:'forward'    }, Numpad8:{ p:1, a:'forward' },
+  ArrowDown:{ p:1, a:'backward' }, Numpad5:{ p:1, a:'backward' }, Numpad2:{ p:1, a:'backward' },
+  ArrowLeft:{ p:1, a:'left'     }, Numpad4:{ p:1, a:'left' },
+  ArrowRight:{ p:1, a:'right'   }, Numpad6:{ p:1, a:'right' },
+  ShiftRight:{ p:1, a:'jump'    }, Slash:{ p:1, a:'jump' }, KeyM:{ p:1, a:'jump' }, Numpad0:{ p:1, a:'jump' }, Enter:{ p:1, a:'jump' },
+  Comma:{ p:1, a:'power'        }, Numpad1:{ p:1, a:'power' }, KeyO:{ p:1, a:'power' }, KeyL:{ p:1, a:'power' },
+  Period:{ p:1, a:'missile'     }, Numpad3:{ p:1, a:'missile' }, KeyP:{ p:1, a:'missile' }
 };
 
 const inputs = Array.from({length:4}, () =>
   ({ forward:false, backward:false, left:false, right:false, jump:false, power:false, missile:false })
 );
+
+function processKey(code, isDown) {
+  const m = KEY_MAP[code];
+  if (m && m.p < numPlayers) {
+    inputs[m.p][m.a] = isDown;
+  }
+}
+
+function resetInputs() {
+  inputs.forEach(p => Object.keys(p).forEach(k => p[k] = false));
+}
 
 window.addEventListener('keydown', e => {
   const m = KEY_MAP[e.code];
@@ -149,14 +168,26 @@ window.addEventListener('keyup', e => {
   if (m) inputs[m.p][m.a] = false;
 });
 
+// Captura de eventos reenviados desde iframes hijos cuando tienen el foco de teclado
+window.addEventListener('message', e => {
+  if (e.data?.type === 'sk-key-event') {
+    processKey(e.data.code, e.data.action === 'down');
+  } else if (e.data?.type === 'sk-key-blur') {
+    resetInputs();
+  }
+});
+
+// Reset ante desenfoque de la ventana para evitar teclas pegadas
+window.addEventListener('blur', resetInputs);
+
 // ══════════════════════════════════════════════════
 // Gamepad polling
 // ══════════════════════════════════════════════════
 function readGp(gp) {
   if (!gp) return null;
   return {
-    forward:  !!(gp.buttons[0]?.pressed || gp.buttons[7]?.pressed || gp.axes[1] < -0.3),
-    backward: !!(gp.buttons[1]?.pressed || gp.buttons[6]?.pressed || gp.axes[1] >  0.3),
+    forward:  !!(gp.buttons[0]?.pressed || gp.buttons[7]?.pressed || gp.buttons[12]?.pressed || gp.axes[1] < -0.3),
+    backward: !!(gp.buttons[1]?.pressed || gp.buttons[6]?.pressed || gp.buttons[13]?.pressed || gp.axes[1] >  0.3),
     left:     !!(gp.axes[0] < -0.3 || gp.buttons[14]?.pressed),
     right:    !!(gp.axes[0] >  0.3 || gp.buttons[15]?.pressed),
     jump:     !!(gp.buttons[4]?.pressed || gp.buttons[5]?.pressed),
@@ -259,7 +290,7 @@ function startSplit(n) {
     const fr = document.createElement('iframe');
     const pName = encodeURIComponent(`${baseName} (${i+1})`);
     // splitMode=1 → iframe espera sk-connect-now del padre para unirse simultáneamente
-    fr.src = `/game.html?autoJoin=${encodeURIComponent(splitRoom)}&playerName=${pName}&hideMenu=1&splitMode=1`;
+    fr.src = `/game.html?autoJoin=${encodeURIComponent(splitRoom)}&playerName=${pName}&hideMenu=1&splitMode=1&splitPlayers=${n}&playerIdx=${i}&audioMute=${i > 0 ? 1 : 0}`;
     fr.setAttribute('allow', 'fullscreen');
 
     fr.addEventListener('load', () => {

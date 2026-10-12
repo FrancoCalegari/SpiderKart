@@ -40,6 +40,9 @@ const SPIDER_API_URL = 'https://spiderwebargapi.com.ar/api/v1';
 const SPIDER_API_KEY = process.env.spiderapikey;
 const SPIDER_DB_NAME = process.env.spiderdbname;
 const ADMIN_TOKEN    = process.env.ADMIN_TOKEN;
+if (!ADMIN_TOKEN) {
+    console.warn('⚠️  [ADVERTENCIA] ADMIN_TOKEN no está definido en el entorno. El editor de niveles (/admin) rechazará accesos.');
+}
 
 const DEFAULT_LEVEL = {
     name: 'Circuito Variado Grande',
@@ -80,6 +83,9 @@ async function executeQuery(query) {
 
 // ─── Middleware Admin ────────────────────────────────────────────────────────
 function requireAdmin(req, res, next) {
+    if (!ADMIN_TOKEN) {
+        return res.status(500).json({ error: 'ADMIN_TOKEN no está configurado en el servidor (.env).' });
+    }
     const token = req.headers['x-admin-token'] || req.query.token;
     if (token === ADMIN_TOKEN) return next();
     res.status(401).json({ error: 'No autorizado. Token inválido.' });
@@ -247,8 +253,11 @@ app.post('/api/level/activate', requireAdmin, async (req, res) => {
 
 // POST /api/admin/login
 app.post('/api/admin/login', (req, res) => {
+    if (!ADMIN_TOKEN) {
+        return res.status(500).json({ ok: false, error: 'ADMIN_TOKEN no está configurado en las variables de entorno del servidor (.env).' });
+    }
     const { token } = req.body;
-    if (token === ADMIN_TOKEN) {
+    if (token && token === ADMIN_TOKEN) {
         res.json({ ok: true });
     } else {
         res.status(401).json({ ok: false, error: 'Token incorrecto.' });
