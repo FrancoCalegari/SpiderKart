@@ -2018,7 +2018,11 @@
   function showWaitingAllFinishedHUD(finishedCount = 1, totalCount = null) {
     const el = document.getElementById('hud-finish-waiting');
     if (!el) return;
-    el.classList.remove('hidden');
+    el.classList.remove('hidden', 'visible');
+    // Forzar reflow para reiniciar la transición
+    void el.offsetWidth;
+    el.style.display = '';
+    requestAnimationFrame(() => el.classList.add('visible'));
     const cntEl = document.getElementById('hfw-counter');
     if (cntEl) {
       if (totalCount !== null && totalCount > 0) {
@@ -2031,7 +2035,11 @@
 
   function hideWaitingAllFinishedHUD() {
     const el = document.getElementById('hud-finish-waiting');
-    if (el) el.classList.add('hidden');
+    if (el) {
+      el.classList.remove('visible');
+      // Esperar a que termine la transición antes de ocultar
+      setTimeout(() => el.classList.add('hidden'), 420);
+    }
   }
 
   function hideFinishScreen() {
@@ -2093,21 +2101,24 @@
     if (placeBadge) {
       placeBadge.textContent = `${myPos}°`;
       if (myPos === 1) {
-        placeBadge.style.background = 'linear-gradient(135deg, #ffd700, #ff8800)';
-        placeBadge.style.boxShadow = '0 0 25px rgba(255,215,0,0.6)';
+        placeBadge.style.background = 'linear-gradient(135deg, #A30000, #ffd700)';
+        placeBadge.style.boxShadow  = '0 0 25px rgba(255,215,0,0.5), 0 0 12px rgba(163,0,0,0.4)';
+        placeBadge.style.color      = '#000';
         if (titleAccent) titleAccent.textContent = 'VICTORIA';
       } else if (myPos === 2) {
-        placeBadge.style.background = 'linear-gradient(135deg, #e0e0e0, #888888)';
-        placeBadge.style.boxShadow = '0 0 20px rgba(220,220,220,0.5)';
+        placeBadge.style.background = 'linear-gradient(135deg, #2A2A2A, #888888)';
+        placeBadge.style.boxShadow  = '0 0 16px rgba(180,180,180,0.3)';
+        placeBadge.style.color      = '#F5F5F5';
         if (titleAccent) titleAccent.textContent = 'PODIO';
       } else if (myPos === 3) {
-        placeBadge.style.background = 'linear-gradient(135deg, #cd7f32, #8b4513)';
-        placeBadge.style.boxShadow = '0 0 20px rgba(205,127,50,0.5)';
+        placeBadge.style.background = 'linear-gradient(135deg, #5c3300, #cd7f32)';
+        placeBadge.style.boxShadow  = '0 0 18px rgba(205,127,50,0.4)';
+        placeBadge.style.color      = '#F5F5F5';
         if (titleAccent) titleAccent.textContent = 'PODIO';
       } else {
-        placeBadge.style.background = 'linear-gradient(135deg, #555555, #222222)';
-        placeBadge.style.boxShadow = 'none';
-        placeBadge.style.color = '#fff';
+        placeBadge.style.background = 'rgba(10,10,10,0.9)';
+        placeBadge.style.boxShadow  = '0 0 0 1px rgba(163,0,0,0.35)';
+        placeBadge.style.color      = '#F5F5F5';
         if (titleAccent) titleAccent.textContent = 'META';
       }
     }
@@ -2251,6 +2262,44 @@
     }
 
     finishEl.classList.add('active');
+
+    // ===== ANIMACIÓN DE ENTRADA =====
+    // 1. Elegir texto del reveal según posición
+    const revealTextEl = document.getElementById('fs-finish-reveal-text');
+    if (revealTextEl) {
+      if (myPos === 1) {
+        revealTextEl.textContent = 'VICTORIA';
+        revealTextEl.style.textShadow = '0 0 80px rgba(255,215,0,0.85), 0 0 30px rgba(255,180,0,0.6), 0 0 10px rgba(255,215,0,0.4)';
+      } else if (myPos <= 3) {
+        revealTextEl.textContent = 'PODIO';
+        revealTextEl.style.textShadow = '0 0 70px rgba(163,0,0,0.75), 0 0 20px rgba(163,0,0,0.5)';
+      } else {
+        revealTextEl.textContent = 'FINISH';
+        revealTextEl.style.textShadow = '0 0 80px rgba(163,0,0,0.85), 0 0 20px rgba(163,0,0,0.5)';
+      }
+    }
+
+    // 2. Reiniciar animaciones con reflow trick para que se reproduzcan desde cero
+    const flashEl     = document.getElementById('fs-flash-overlay');
+    const revealEl    = document.getElementById('fs-finish-reveal');
+    const containerEl = finishEl.querySelector('.fs-container');
+
+    if (flashEl) {
+      flashEl.style.animation = 'none';
+      void flashEl.offsetWidth;
+      flashEl.style.animation = 'fsFlash 0.55s ease-out forwards';
+    }
+    if (revealTextEl) {
+      revealTextEl.style.animation = 'none';
+      void revealTextEl.offsetWidth;
+      revealTextEl.style.animation = 'fsRevealText 1s cubic-bezier(0.16, 1, 0.3, 1) forwards';
+    }
+    if (containerEl) {
+      containerEl.style.opacity = '0';
+      containerEl.style.animation = 'none';
+      void containerEl.offsetWidth;
+      containerEl.style.animation = 'fsContainerIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.88s forwards';
+    }
 
     // Integración Torneo
     const userId = localStorage.getItem('spiderkart_userId');
